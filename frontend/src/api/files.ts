@@ -1,6 +1,7 @@
 import { useAuthStore } from "@/stores/auth";
 import { useLayoutStore } from "@/stores/layout";
 import { baseURL } from "@/utils/constants";
+import { requiresChunkedUpload } from "./uploadLimits";
 import { upload as postTus, useTus } from "./tus";
 import { createURL, fetchURL, removePrefix, StatusError } from "./utils";
 import { isEncodableResponse, makeRawResource } from "@/utils/encodings";
@@ -109,6 +110,13 @@ export async function post(
   overwrite = false,
   onupload: any = () => {}
 ) {
+  const tusAvailable = await useTus(content);
+  if (requiresChunkedUpload(content) && !tusAvailable) {
+    throw new Error(
+      "This file exceeds the Cloudflare-safe 95 MiB request limit and requires resumable uploads."
+    );
+  }
+
   // Use the pre-existing API if:
   const useResourcesApi =
     // a folder is being created
@@ -117,7 +125,7 @@ export async function post(
     (content instanceof Blob &&
       !["http:", "https:"].includes(window.location.protocol)) ||
     // Tus is disabled / not applicable
-    !(await useTus(content));
+    !tusAvailable;
   return useResourcesApi
     ? postResources(url, content, overwrite, onupload)
     : postTus(url, content, overwrite, onupload);

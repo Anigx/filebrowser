@@ -22,6 +22,10 @@ import (
 // beyond that the body is not worth reading just to throw away.
 const maxPatchDrainBytes = 32 << 20 // 32MB
 
+// maxTusPatchBytes leaves a 5 MiB margin under Cloudflare's nominal 100 MB
+// proxied-request body limit. The browser uses the same 95 MiB cap.
+const maxTusPatchBytes = 95 << 20
+
 // drainRequestBody discards what the client already put on the wire for a
 // request the handler answered without reading. net/http only drains 256KiB on
 // its own before giving up and closing the connection, and a connection closed
@@ -215,6 +219,9 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	if r.Header.Get("Content-Type") != "application/offset+octet-stream" {
 		return http.StatusUnsupportedMediaType, nil
 	}
+	if r.ContentLength > maxTusPatchBytes {
+		return http.StatusRequestEntityTooLarge, fmt.Errorf("upload chunk exceeds Cloudflare-safe limit of %d bytes", maxTusPatchBytes)
+	}
 
 	uploadOffset, err := getUploadOffset(r)
 	if err != nil {
@@ -288,17 +295,21 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	// PATCH could stream arbitrary data to disk regardless of the length the
 	// client declared when the upload was created.
 	remaining := uploadLength - uploadOffset
-	bytesWritten, err := io.Copy(openFile, io.LimitReader(r.Body, remaining+1))
+	chunkLimit := remaining
+	if chunkLimit > maxTusPatchBytes {
+		chunkLimit = maxTusPatchBytes
+	}
+	bytesWritten, err := io.Copy(openFile, io.LimitReader(r.Body, chunkLimit+1))
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("could not write to file: %w", err)
 	}
-	if bytesWritten > remaining {
-		// The client sent more than it declared; roll this chunk back so the
-		// file stays consistent with the tracked offset, and reject it.
+	if bytesWritten > chunkLimit {
+		// The client sent more than this request may carry; roll this chunk back
+		// so the file stays consistent with the tracked offset.
 		if truncErr := openFile.Truncate(uploadOffset); truncErr != nil {
 			return http.StatusInternalServerError, fmt.Errorf("could not truncate file: %w", truncErr)
 		}
-		return http.StatusRequestEntityTooLarge, fmt.Errorf("upload exceeds declared length of %d bytes", uploadLength)
+		return http.StatusRequestEntityTooLarge, fmt.Errorf("upload chunk exceeds allowed limit of %d bytes", chunkLimit)
 	}
 
 	// Sync the file to ensure all data is written to storage

@@ -2,6 +2,7 @@ import * as tus from "tus-js-client";
 import { baseURL, tusEndpoint, tusSettings, origin } from "@/utils/constants";
 import { useAuthStore } from "@/stores/auth";
 import { removePrefix } from "@/api/utils";
+import { effectiveTusChunkSize } from "./uploadLimits";
 
 const RETRY_BASE_DELAY = 1000;
 const RETRY_MAX_DELAY = 20000;
@@ -30,7 +31,7 @@ export async function upload(
   return new Promise<void | string>((resolve, reject) => {
     const upload = new tus.Upload(content, {
       endpoint: `${origin}${baseURL}${resourcePath}`,
-      chunkSize: tusSettings.chunkSize,
+      chunkSize: effectiveTusChunkSize(tusSettings.chunkSize),
       retryDelays: computeRetryDelays(tusSettings),
       parallelUploads: 1,
       storeFingerprintForResuming: false,

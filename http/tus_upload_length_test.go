@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -69,5 +70,49 @@ func TestTusPatchEnforcesUploadLength(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(userScope, "file.txt")); string(data) != "hello" {
 		t.Fatalf("expected file content \"hello\", got %q", string(data))
+	}
+}
+
+func TestTusPatchRejectsCloudflareOversizedChunk(t *testing.T) {
+	root := t.TempDir()
+	userScope := filepath.Join(root, "user")
+	if err := os.MkdirAll(userScope, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	key := []byte("cloudflare-chunk-test-key")
+	perm := users.Permissions{Create: true, Modify: true}
+	st := scopedUserStorage(t, userScope, perm, key)
+	token := signToken(t, st, perm, key)
+	cache := newMemoryUploadCache()
+	t.Cleanup(cache.Close)
+	post := handle(tusPostHandler(cache), "", st, &settings.Server{})
+	patch := handle(tusPatchHandler(cache), "", st, &settings.Server{})
+
+	create, _ := http.NewRequest(http.MethodPost, "/large.bin", http.NoBody)
+	create.Header.Set("X-Auth", token)
+	create.Header.Set("Upload-Length", strconv.FormatInt(maxTusPatchBytes+1, 10))
+	created := httptest.NewRecorder()
+	post.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("POST expected 201, got %d body=%q", created.Code, created.Body.String())
+	}
+
+	// The declared request length is rejected before its body is consumed or
+	// appended, so this test does not need to allocate a >95 MiB buffer.
+	request, _ := http.NewRequest(http.MethodPatch, "/large.bin", strings.NewReader("x"))
+	request.ContentLength = maxTusPatchBytes + 1
+	request.Header.Set("X-Auth", token)
+	request.Header.Set("Content-Type", "application/offset+octet-stream")
+	request.Header.Set("Upload-Offset", "0")
+	recorded := httptest.NewRecorder()
+	patch.ServeHTTP(recorded, request)
+	if recorded.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized PATCH expected 413, got %d body=%q", recorded.Code, recorded.Body.String())
+	}
+	if info, err := os.Stat(filepath.Join(userScope, "large.bin")); err != nil {
+		t.Fatal(err)
+	} else if info.Size() != 0 {
+		t.Fatalf("oversized PATCH wrote %d bytes", info.Size())
 	}
 }
