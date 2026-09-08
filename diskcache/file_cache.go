@@ -14,6 +14,10 @@ import (
 	"github.com/spf13/afero"
 )
 
+const maxCacheLoadBytes = 64 << 20 // 64 MiB
+
+var ErrCacheValueTooLarge = errors.New("cache value exceeds load limit")
+
 type FileCache struct {
 	fs afero.Fs
 
@@ -55,9 +59,12 @@ func (f *FileCache) Load(_ context.Context, key string) (value []byte, exist boo
 	}
 	defer r.Close()
 
-	value, err = io.ReadAll(r)
+	value, err = io.ReadAll(io.LimitReader(r, maxCacheLoadBytes+1))
 	if err != nil {
 		return nil, false, err
+	}
+	if len(value) > maxCacheLoadBytes {
+		return nil, false, ErrCacheValueTooLarge
 	}
 	return value, true, nil
 }

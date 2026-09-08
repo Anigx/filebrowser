@@ -4,26 +4,31 @@ import (
 	"log"
 	"net/http"
 	gopath "path"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/tomasen/realip"
 
+	"github.com/filebrowser/filebrowser/v2/files"
 	"github.com/filebrowser/filebrowser/v2/rules"
 	"github.com/filebrowser/filebrowser/v2/runner"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/storage"
 	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/spf13/afero"
 )
 
 type handleFunc func(w http.ResponseWriter, r *http.Request, d *data) (int, error)
 
 type data struct {
 	*runner.Runner
-	settings *settings.Settings
-	server   *settings.Server
-	store    *storage.Storage
-	user     *users.User
-	raw      interface{}
+	settings  *settings.Settings
+	server    *settings.Server
+	store     *storage.Storage
+	user      *users.User
+	sessionID string
+	raw       interface{}
 
 	// checkerPrefix is prepended to every path before evaluating rules. It is
 	// set when the user's filesystem has been rebased onto a subdirectory (as
@@ -46,6 +51,23 @@ func (d *data) Check(path string) bool {
 // Check, it ignores HideDotfiles: hiding dotfiles is a display preference, so
 // it must not stop a user from operating on a tree that contains one.
 func (d *data) CheckRules(path string) bool {
+	if !d.checkRulePath(path) {
+		return false
+	}
+
+	// An in-scope symlink can name a different virtual path than its lexical
+	// spelling. Authorizing only the spelling would let /alias bypass a deny
+	// rule for /protected/target. Check the resolved path as well when it maps
+	// back into this filesystem's root. Paths that do not exist yet retain the
+	// normal create semantics and are authorized by their lexical path alone.
+	if resolved, ok := d.resolvedRulePath(path); ok && resolved != slashClean(path) {
+		return d.checkRulePath(resolved)
+	}
+
+	return true
+}
+
+func (d *data) checkRulePath(path string) bool {
 	path = d.rulePath(path)
 
 	allow := true
@@ -62,6 +84,32 @@ func (d *data) CheckRules(path string) bool {
 	}
 
 	return allow
+}
+
+// resolvedRulePath returns the resolved virtual path for an existing target
+// below the current filesystem root. It intentionally ignores targets outside
+// that root: their authorization is governed by the explicit
+// FollowExternalSymlinks configuration and they cannot be represented by a
+// user-scope rule path.
+func (d *data) resolvedRulePath(name string) (string, bool) {
+	base := files.BasePath(d.user.Fs)
+	if base == nil {
+		return "", false
+	}
+
+	root, err := filepath.EvalSymlinks(afero.FullBaseFsPath(base, "/"))
+	if err != nil {
+		return "", false
+	}
+	target, err := filepath.EvalSymlinks(afero.FullBaseFsPath(base, name))
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return slashClean(rel), true
 }
 
 // rulePath canonicalizes path into the form the rules are written in.

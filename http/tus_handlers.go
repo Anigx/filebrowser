@@ -1,9 +1,11 @@
 package fbhttp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -58,91 +60,101 @@ func keepUploadActive(cache UploadCache, filePath string) func() {
 
 func tusPostHandler(cache UploadCache) handleFunc {
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
-		if !d.user.Perm.Create || !d.Check(r.URL.Path) {
+		return withUploadLease(r.Context(), cache, func() (int, error) {
+			return tusPostUpload(w, r, d, cache)
+		})
+	})
+}
+
+func tusPostUpload(w http.ResponseWriter, r *http.Request, d *data, cache UploadCache) (int, error) {
+	if !d.user.Perm.Create || !d.Check(r.URL.Path) {
+		return http.StatusForbidden, nil
+	}
+
+	file, err := files.NewFileInfo(&files.FileOptions{
+		Fs:         d.user.Fs,
+		Path:       r.URL.Path,
+		Modify:     d.user.Perm.Modify,
+		Expand:     false,
+		ReadHeader: d.server.TypeDetectionByHeader,
+		Checker:    d,
+	})
+	switch {
+	case errors.Is(err, afero.ErrFileNotFound):
+		dirPath := filepath.Dir(r.URL.Path)
+		if _, statErr := d.user.Fs.Stat(dirPath); os.IsNotExist(statErr) {
+			if mkdirErr := d.user.Fs.MkdirAll(dirPath, d.settings.DirMode); mkdirErr != nil {
+				return http.StatusInternalServerError, err
+			}
+		}
+	case err != nil:
+		return errToStatus(err), err
+	}
+
+	fileFlags := os.O_CREATE | os.O_WRONLY
+
+	// if file exists
+	if file != nil {
+		if file.IsDir {
+			return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", file.RealPath())
+		}
+
+		// Existing files will remain untouched unless explicitly instructed to override
+		if r.URL.Query().Get("override") != "true" {
+			return http.StatusConflict, nil
+		}
+
+		// Permission for overwriting the file
+		if !d.user.Perm.Modify {
 			return http.StatusForbidden, nil
 		}
 
-		file, err := files.NewFileInfo(&files.FileOptions{
-			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
-			Modify:     d.user.Perm.Modify,
-			Expand:     false,
-			ReadHeader: d.server.TypeDetectionByHeader,
-			Checker:    d,
-		})
-		switch {
-		case errors.Is(err, afero.ErrFileNotFound):
-			dirPath := filepath.Dir(r.URL.Path)
-			if _, statErr := d.user.Fs.Stat(dirPath); os.IsNotExist(statErr) {
-				if mkdirErr := d.user.Fs.MkdirAll(dirPath, d.settings.DirMode); mkdirErr != nil {
-					return http.StatusInternalServerError, err
-				}
-			}
-		case err != nil:
-			return errToStatus(err), err
-		}
+		fileFlags |= os.O_TRUNC
+	}
 
-		fileFlags := os.O_CREATE | os.O_WRONLY
+	openFile, err := d.user.Fs.OpenFile(r.URL.Path, fileFlags, d.settings.FileMode)
+	if err != nil {
+		return errToStatus(err), err
+	}
+	defer openFile.Close()
 
-		// if file exists
-		if file != nil {
-			if file.IsDir {
-				return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", file.RealPath())
-			}
-
-			// Existing files will remain untouched unless explicitly instructed to override
-			if r.URL.Query().Get("override") != "true" {
-				return http.StatusConflict, nil
-			}
-
-			// Permission for overwriting the file
-			if !d.user.Perm.Modify {
-				return http.StatusForbidden, nil
-			}
-
-			fileFlags |= os.O_TRUNC
-		}
-
-		openFile, err := d.user.Fs.OpenFile(r.URL.Path, fileFlags, d.settings.FileMode)
-		if err != nil {
-			return errToStatus(err), err
-		}
-		defer openFile.Close()
-
-		file, err = files.NewFileInfo(&files.FileOptions{
-			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
-			Modify:     d.user.Perm.Modify,
-			Expand:     false,
-			ReadHeader: false,
-			Checker:    d,
-			Content:    false,
-		})
-		if err != nil {
-			return errToStatus(err), err
-		}
-
-		uploadLength, err := getUploadLength(r)
-		if err != nil || uploadLength < 0 {
-			return http.StatusBadRequest, fmt.Errorf("invalid upload length: %w", err)
-		}
-
-		// Enables the user to utilize the PATCH endpoint for uploading file data.
-		// The removal callback deletes an abandoned upload through the user's
-		// scoped filesystem, so eviction cannot follow a symlink out of scope.
-		uploadPath := r.URL.Path
-		cache.Register(file.RealPath(), uploadLength, func() error {
-			return d.user.Fs.Remove(uploadPath)
-		})
-
-		basePath := "/" + strings.Trim(strings.TrimSpace(d.server.BaseURL), "/")
-		if basePath == "/" {
-			basePath = ""
-		}
-
-		w.Header().Set("Location", basePath+"/api/tus"+r.URL.EscapedPath())
-		return http.StatusCreated, nil
+	file, err = files.NewFileInfo(&files.FileOptions{
+		Fs:         d.user.Fs,
+		Path:       r.URL.Path,
+		Modify:     d.user.Perm.Modify,
+		Expand:     false,
+		ReadHeader: false,
+		Checker:    d,
+		Content:    false,
 	})
+	if err != nil {
+		return errToStatus(err), err
+	}
+
+	uploadLength, err := getUploadLength(r)
+	if err != nil || uploadLength < 0 {
+		return http.StatusBadRequest, fmt.Errorf("invalid upload length: %w", err)
+	}
+
+	// Enables the user to utilize the PATCH endpoint for uploading file data.
+	// The removal callback deletes an abandoned upload through the user's
+	// scoped filesystem, so eviction cannot follow a symlink out of scope.
+	uploadPath := r.URL.Path
+	objectID, err := uploadObjectID(file)
+	if err != nil {
+		return http.StatusConflict, err
+	}
+	cache.Register(file.RealPath(), uploadLength, objectID, func() error {
+		return d.user.Fs.Remove(uploadPath)
+	})
+
+	basePath := "/" + strings.Trim(strings.TrimSpace(d.server.BaseURL), "/")
+	if basePath == "/" {
+		basePath = ""
+	}
+
+	w.Header().Set("Location", basePath+"/api/tus"+r.URL.EscapedPath())
+	return http.StatusCreated, nil
 }
 
 func tusHeadHandler(cache UploadCache) handleFunc {
@@ -164,13 +176,18 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 			return errToStatus(err), err
 		}
 
-		uploadLength, err := cache.GetLength(file.RealPath())
+		entry, err := cache.Get(file.RealPath())
 		if err != nil {
 			return http.StatusNotFound, err
 		}
+		objectID, err := uploadObjectID(file)
+		if err != nil || objectID != entry.objectID {
+			cache.Complete(file.RealPath())
+			return http.StatusNotFound, nil
+		}
 
 		w.Header().Set("Upload-Offset", strconv.FormatInt(file.Size, 10))
-		w.Header().Set("Upload-Length", strconv.FormatInt(uploadLength, 10))
+		w.Header().Set("Upload-Length", strconv.FormatInt(entry.size, 10))
 
 		return http.StatusOK, nil
 	})
@@ -178,7 +195,9 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 
 func tusPatchHandler(cache UploadCache) handleFunc {
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
-		status, err := tusPatchUpload(w, r, d, cache)
+		status, err := withUploadLease(r.Context(), cache, func() (int, error) {
+			return tusPatchUpload(w, r, d, cache)
+		})
 		// A rejected chunk is still a chunk the client is streaming: read what is
 		// left of it so the answer reaches the client on a connection that stays
 		// usable, instead of being lost to a reset.
@@ -218,10 +237,16 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 		return errToStatus(err), err
 	}
 
-	uploadLength, err := cache.GetLength(file.RealPath())
+	entry, err := cache.Get(file.RealPath())
 	if err != nil {
 		return http.StatusNotFound, err
 	}
+	objectID, err := uploadObjectID(file)
+	if err != nil || objectID != entry.objectID {
+		cache.Complete(file.RealPath())
+		return http.StatusNotFound, nil
+	}
+	uploadLength := entry.size
 
 	if uploadOffset > uploadLength {
 		return http.StatusBadRequest, fmt.Errorf("upload offset %d exceeds declared length %d", uploadOffset, uploadLength)
@@ -295,36 +320,70 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 
 func tusDeleteHandler(cache UploadCache) handleFunc {
 	return withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
-		if r.URL.Path == "/" || !d.user.Perm.Delete {
-			return http.StatusForbidden, nil
-		}
-
-		file, err := files.NewFileInfo(&files.FileOptions{
-			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
-			Modify:     d.user.Perm.Modify,
-			Expand:     false,
-			ReadHeader: d.server.TypeDetectionByHeader,
-			Checker:    d,
+		return withUploadLease(r.Context(), cache, func() (int, error) {
+			return tusDeleteUpload(r, d, cache)
 		})
-		if err != nil {
-			return errToStatus(err), err
-		}
-
-		_, err = cache.GetLength(file.RealPath())
-		if err != nil {
-			return http.StatusNotFound, err
-		}
-
-		err = d.user.Fs.RemoveAll(r.URL.Path)
-		if err != nil {
-			return errToStatus(err), err
-		}
-
-		cache.Complete(file.RealPath())
-
-		return http.StatusNoContent, nil
 	})
+}
+
+func tusDeleteUpload(r *http.Request, d *data, cache UploadCache) (int, error) {
+	if r.URL.Path == "/" || !d.user.Perm.Delete {
+		return http.StatusForbidden, nil
+	}
+
+	file, err := files.NewFileInfo(&files.FileOptions{
+		Fs:         d.user.Fs,
+		Path:       r.URL.Path,
+		Modify:     d.user.Perm.Modify,
+		Expand:     false,
+		ReadHeader: d.server.TypeDetectionByHeader,
+		Checker:    d,
+	})
+	if err != nil {
+		return errToStatus(err), err
+	}
+
+	if err = checkDescendants(d, r.URL.Path, ""); err != nil {
+		return errToStatus(err), err
+	}
+
+	entry, err := cache.Get(file.RealPath())
+	if err != nil {
+		return http.StatusNotFound, err
+	}
+	objectID, err := uploadObjectID(file)
+	if err != nil || objectID != entry.objectID {
+		cache.Complete(file.RealPath())
+		return http.StatusNotFound, nil
+	}
+
+	err = d.user.Fs.RemoveAll(r.URL.Path)
+	if err != nil {
+		return errToStatus(err), err
+	}
+
+	cache.Complete(file.RealPath())
+	if err = d.store.Share.DeleteWithPathPrefix(file.Path, d.user.ID); err != nil {
+		log.Printf("WARNING: Error(s) occurred while deleting associated shares with file: %s", err)
+	}
+
+	return http.StatusNoContent, nil
+}
+
+func withUploadLease(ctx context.Context, cache UploadCache, fn func() (int, error)) (int, error) {
+	status := http.StatusInternalServerError
+	var handlerErr error
+	err := cache.WithLease(ctx, func() error {
+		status, handlerErr = fn()
+		return nil
+	})
+	if err == nil {
+		return status, handlerErr
+	}
+	if errors.Is(err, errUploadLeaseHeld) {
+		return http.StatusConflict, nil
+	}
+	return http.StatusInternalServerError, err
 }
 
 func getUploadLength(r *http.Request) (int64, error) {

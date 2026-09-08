@@ -1,18 +1,19 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/files"
+	"github.com/filebrowser/filebrowser/v2/runner"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
@@ -85,17 +86,31 @@ func (a *HookAuth) LoginPage() bool {
 
 // RunCommand starts the hook command and returns the action
 func (a *HookAuth) RunCommand() (string, error) {
-	command := strings.Split(a.Command, " ")
-
-	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("USERNAME=%s", a.Cred.Username))
-	cmd.Env = append(cmd.Env, fmt.Sprintf("PASSWORD=%s", a.Cred.Password))
-	out, err := cmd.Output()
+	name, args, err := runner.SplitCommandAndArgs(a.Command)
 	if err != nil {
 		return "", err
 	}
+	command := append([]string{name}, args...)
 
-	a.GetValues(string(out))
+	s := a.Settings
+	if s == nil {
+		s = &settings.Settings{}
+	}
+	cmd, cancel, err := runner.NewCommand(s, command)
+	if err != nil {
+		return "", err
+	}
+	defer cancel()
+	cmd.Env = append(os.Environ(), fmt.Sprintf("USERNAME=%s", a.Cred.Username))
+	cmd.Env = append(cmd.Env, fmt.Sprintf("PASSWORD=%s", a.Cred.Password))
+
+	var out bytes.Buffer
+	cmd.Stdout = runner.LimitOutput(s, &out)
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	a.GetValues(out.String())
 
 	return a.Fields.Values["hook.action"], nil
 }

@@ -14,6 +14,10 @@ import (
 
 var srtLineBreakTag = regexp.MustCompile(`(?i)<br(?:\s+[^>]*)?\s*/?>`)
 
+// maxSubtitleBytes bounds the source and the several in-memory representations
+// created while converting SRT/ASS/SSA to WebVTT.
+const maxSubtitleBytes int64 = 10 << 20 // 10 MiB
+
 var subtitleHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	if !d.user.Perm.Download {
 		return http.StatusAccepted, nil
@@ -43,23 +47,31 @@ func subtitleFileHandler(w http.ResponseWriter, r *http.Request, file *files.Fil
 	if !files.IsSupportedSubtitle(file.Name) {
 		return http.StatusBadRequest, nil
 	}
+	if file.Size > maxSubtitleBytes {
+		return http.StatusRequestEntityTooLarge, nil
+	}
 
-	fd, err := file.Fs.Open(file.Path)
+	fd, err := openRegularFile(file)
 	if err != nil {
-		return http.StatusInternalServerError, err
+		return errToStatus(err), err
 	}
 	defer fd.Close()
 
 	// load subtitle for conversion to vtt
 	var sub *astisub.Subtitles
-	if strings.HasSuffix(file.Name, ".srt") {
-		content, readErr := io.ReadAll(fd)
+	if strings.HasSuffix(file.Name, ".srt") || strings.HasSuffix(file.Name, ".ass") || strings.HasSuffix(file.Name, ".ssa") {
+		content, readErr := io.ReadAll(io.LimitReader(fd, maxSubtitleBytes+1))
 		if readErr != nil {
 			return http.StatusInternalServerError, readErr
 		}
-		sub, err = astisub.ReadFromSRT(bytes.NewReader(normalizeSRTLineBreaks(content)))
-	} else if strings.HasSuffix(file.Name, ".ass") || strings.HasSuffix(file.Name, ".ssa") {
-		sub, err = astisub.ReadFromSSA(fd)
+		if int64(len(content)) > maxSubtitleBytes {
+			return http.StatusRequestEntityTooLarge, nil
+		}
+		if strings.HasSuffix(file.Name, ".srt") {
+			sub, err = astisub.ReadFromSRT(bytes.NewReader(normalizeSRTLineBreaks(content)))
+		} else {
+			sub, err = astisub.ReadFromSSA(bytes.NewReader(content))
+		}
 	}
 	if err != nil {
 		return http.StatusInternalServerError, err

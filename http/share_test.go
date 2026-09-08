@@ -8,10 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/asdine/storm/v3"
-	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/share"
@@ -75,7 +73,7 @@ func TestAdminShareGetsHandlerMatchesOwnerScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to construct request: %v", err)
 	}
-	req.Header.Set("X-Auth", signShareTestToken(t, admin.ID, admin.Username, adminPerm, key))
+	req.Header.Set("X-Auth", signTokenForUser(t, st, admin.ID, admin.Username, adminPerm, key))
 
 	rec := httptest.NewRecorder()
 	handle(shareGetsHandler, "", st, &settings.Server{Root: root}).ServeHTTP(rec, req)
@@ -109,7 +107,7 @@ func TestSharePostHandlerDoesNotLeakSecrets(t *testing.T) {
 	key := []byte("test-signing-key")
 	perm := users.Permissions{Share: true, Download: true}
 	st := scopedUserStorage(t, userScope, perm, key)
-	signed := signToken(t, perm, key)
+	signed := signToken(t, st, perm, key)
 
 	body := `{"password":"ShareSecret123!","expires":"24","unit":"hours"}`
 	req, _ := http.NewRequest(http.MethodPost, "/file.txt", strings.NewReader(body))
@@ -144,21 +142,4 @@ func TestSharePostHandlerDoesNotLeakSecrets(t *testing.T) {
 	if stored.PasswordHash == "" || stored.Token == "" {
 		t.Fatalf("server-side secrets not persisted: hash=%q token=%q", stored.PasswordHash, stored.Token)
 	}
-}
-
-func signShareTestToken(t *testing.T, id uint, username string, perm users.Permissions, key []byte) string {
-	t.Helper()
-
-	claims := &authToken{
-		User: userInfo{ID: id, Username: username, Perm: perm},
-		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-time.Minute)),
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-		},
-	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(key)
-	if err != nil {
-		t.Fatalf("failed to sign token: %v", err)
-	}
-	return signed
 }

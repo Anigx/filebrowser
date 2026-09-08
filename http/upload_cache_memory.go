@@ -2,7 +2,10 @@ package fbhttp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
@@ -10,49 +13,43 @@ import (
 
 const uploadCacheTTL = 3 * time.Minute
 
-// UploadCache is an interface for tracking active uploads.
-// Allows for different backends (e.g. in-memory or redis)
-// to support both single instance and multi replica deployments.
+var errUploadLeaseHeld = errors.New("another upload or resource mutation is in progress")
+
+// UploadCache tracks active uploads. Every filesystem operation that can change
+// an upload path must run under WithLease. This is deliberately one lease for
+// the cache rather than a path-only mutex: a directory mutation overlaps every
+// descendant upload and must not race a PATCH which has already checked its
+// path but has not opened it yet.
 type UploadCache interface {
-	// Register stores an upload with its expected file size. remove is called if
-	// the upload expires before completion, to delete the partial file; it must
-	// route through the uploading user's scoped filesystem so that eviction
-	// cannot follow a symlink out of the user's scope.
-	Register(filePath string, fileSize int64, remove func() error)
-
-	// Complete removes an upload from the cache
+	Register(filePath string, fileSize int64, objectID string, remove func() error)
 	Complete(filePath string)
-
-	// GetLength returns the expected file size for an active upload
-	GetLength(filePath string) (int64, error)
-
-	// Touch refreshes the TTL for an active upload
+	Get(filePath string) (uploadCacheEntry, error)
 	Touch(filePath string)
-
-	// Close cleans up any resources
+	InvalidatePathPrefix(path string)
+	WithLease(context.Context, func() error) error
 	Close()
 }
 
-// memoryUploadEntry is the value stored for each active upload.
-type memoryUploadEntry struct {
-	size   int64
-	remove func() error
+type uploadCacheEntry struct {
+	size     int64
+	objectID string
+	remove   func() error
 }
 
-// memoryUploadCache is an upload cache for single replica deployments
+// memoryUploadEntry is retained as an internal compatibility alias for cache
+// tests and callers which previously inspected the in-memory value.
+type memoryUploadEntry = uploadCacheEntry
+
 type memoryUploadCache struct {
-	cache *ttlcache.Cache[string, memoryUploadEntry]
+	cache *ttlcache.Cache[string, uploadCacheEntry]
+	lease sync.Mutex
 }
 
 func newMemoryUploadCache() *memoryUploadCache {
-	cache := ttlcache.New[string, memoryUploadEntry]()
-	cache.OnEviction(func(_ context.Context, reason ttlcache.EvictionReason, item *ttlcache.Item[string, memoryUploadEntry]) {
+	cache := ttlcache.New[string, uploadCacheEntry]()
+	cache.OnEviction(func(_ context.Context, reason ttlcache.EvictionReason, item *ttlcache.Item[string, uploadCacheEntry]) {
 		if reason == ttlcache.EvictionReasonExpired {
 			fmt.Printf("deleting incomplete upload file: \"%s\"\n", item.Key())
-			// Delete through the scoped removal callback rather than a raw
-			// os.Remove on the cached path, so an ancestor directory swapped for
-			// a symlink during the TTL window cannot redirect the delete outside
-			// the user's scope.
 			if remove := item.Value().remove; remove != nil {
 				if err := remove(); err != nil {
 					fmt.Printf("failed to delete incomplete upload file %q: %v\n", item.Key(), err)
@@ -61,38 +58,36 @@ func newMemoryUploadCache() *memoryUploadCache {
 		}
 	})
 	go cache.Start()
-
 	return &memoryUploadCache{cache: cache}
 }
 
-func (c *memoryUploadCache) Register(filePath string, fileSize int64, remove func() error) {
-	c.cache.Set(filePath, memoryUploadEntry{size: fileSize, remove: remove}, uploadCacheTTL)
+func (c *memoryUploadCache) Register(filePath string, fileSize int64, objectID string, remove func() error) {
+	c.cache.Set(filePath, uploadCacheEntry{size: fileSize, objectID: objectID, remove: remove}, uploadCacheTTL)
 }
-
-func (c *memoryUploadCache) Complete(filePath string) {
-	c.cache.Delete(filePath)
-}
-
-func (c *memoryUploadCache) GetLength(filePath string) (int64, error) {
+func (c *memoryUploadCache) Complete(filePath string) { c.cache.Delete(filePath) }
+func (c *memoryUploadCache) Get(filePath string) (uploadCacheEntry, error) {
 	item := c.cache.Get(filePath)
 	if item == nil {
-		return 0, fmt.Errorf("no active upload found for the given path")
+		return uploadCacheEntry{}, fmt.Errorf("no active upload found for the given path")
 	}
-	return item.Value().size, nil
+	return item.Value(), nil
 }
-
-func (c *memoryUploadCache) Touch(filePath string) {
-	c.cache.Touch(filePath)
+func (c *memoryUploadCache) Touch(filePath string) { c.cache.Touch(filePath) }
+func (c *memoryUploadCache) InvalidatePathPrefix(path string) {
+	prefix := strings.TrimRight(path, "/")
+	for _, key := range c.cache.Keys() {
+		if key == prefix || strings.HasPrefix(key, prefix+"/") {
+			c.cache.Delete(key)
+		}
+	}
 }
-
-func (c *memoryUploadCache) Close() {
-	c.cache.Stop()
+func (c *memoryUploadCache) WithLease(_ context.Context, fn func() error) error {
+	c.lease.Lock()
+	defer c.lease.Unlock()
+	return fn()
 }
+func (c *memoryUploadCache) Close() { c.cache.Stop() }
 
-// NewUploadCache creates a new upload cache.
-// If redisURL is empty, an in-memory cache will be used (suitable for single instance deployments).
-// Otherwise, Redis will be used for the cache (suitable for multi-instance deployments).
-// The redisURL can include credentials, e.g. redis://user:pass@host:port
 func NewUploadCache(redisURL string) (UploadCache, error) {
 	if redisURL != "" {
 		return newRedisUploadCache(redisURL)

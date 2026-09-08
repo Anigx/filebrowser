@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	fbAuth "github.com/filebrowser/filebrowser/v2/auth"
+	"github.com/filebrowser/filebrowser/v2/sessions"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/storage/bolt"
 	"github.com/filebrowser/filebrowser/v2/users"
@@ -97,16 +98,24 @@ func TestExpiredTokenNeedsProxyAssertion(t *testing.T) {
 		t.Fatalf("failed to save auther: %v", err)
 	}
 
+	expiredJTI, err := newSessionID()
+	if err != nil {
+		t.Fatalf("failed to create JTI: %v", err)
+	}
 	expired := &authToken{
 		User: userInfo{ID: 1, Username: "u", Perm: perm},
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
+			ID:        expiredJTI,
 		},
 	}
 	expiredToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, expired).SignedString(key)
 	if err != nil {
 		t.Fatalf("failed to sign token: %v", err)
+	}
+	if err := st.Sessions.Create(sessions.Session{ID: expiredJTI, UserID: 1, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("failed to persist expired-token session: %v", err)
 	}
 
 	protected := withUser(func(w http.ResponseWriter, _ *http.Request, _ *data) (int, error) {
@@ -144,7 +153,7 @@ func TestExpiredTokenNeedsProxyAssertion(t *testing.T) {
 	})
 
 	t.Run("valid token needs no assertion", func(t *testing.T) {
-		if rec := get(signToken(t, perm, key), ""); rec.Code != http.StatusOK {
+		if rec := get(signToken(t, st, perm, key), ""); rec.Code != http.StatusOK {
 			t.Errorf("valid token = %d, body=%q; want 200", rec.Code, rec.Body.String())
 		}
 	})

@@ -1,6 +1,8 @@
 package fbhttp
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log"
@@ -14,6 +16,7 @@ import (
 
 	fbAuth "github.com/filebrowser/filebrowser/v2/auth"
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
+	"github.com/filebrowser/filebrowser/v2/sessions"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
@@ -37,6 +40,7 @@ type userInfo struct {
 	DateFormat            bool              `json:"dateFormat"`
 	Username              string            `json:"username"`
 	AceEditorTheme        string            `json:"aceEditorTheme"`
+	SessionVersion        uint64            `json:"sessionVersion"`
 }
 
 type authToken struct {
@@ -126,10 +130,18 @@ func withUser(fn handleFunc) handleFunc {
 			return http.StatusUnauthorized, nil
 		}
 
-		expiresSoon := tk.ExpiresAt != nil && time.Until(tk.ExpiresAt.Time) < time.Hour
-		updated := tk.IssuedAt != nil && tk.IssuedAt.Unix() < d.store.Users.LastUpdate(tk.User.ID)
+		if tk.ID == "" || tk.ExpiresAt == nil || d.store.Sessions == nil {
+			return http.StatusUnauthorized, nil
+		}
+		valid, err := d.store.Sessions.Valid(tk.ID, tk.User.ID)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if !valid {
+			return http.StatusUnauthorized, nil
+		}
 
-		if expiresSoon || updated {
+		if time.Until(tk.ExpiresAt.Time) < time.Hour {
 			w.Header().Add("X-Renew-Token", "true")
 		}
 
@@ -137,6 +149,10 @@ func withUser(fn handleFunc) handleFunc {
 		if err != nil {
 			return http.StatusInternalServerError, err
 		}
+		if tk.User.SessionVersion != d.user.SessionVersion {
+			return http.StatusUnauthorized, nil
+		}
+		d.sessionID = tk.ID
 
 		canonicalizeRequestPath(r)
 		return fn(w, r, d)
@@ -172,7 +188,7 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusInternalServerError, err
 		}
 
-		return printToken(w, r, d, user, tokenExpireTime)
+		return printToken(w, d, user, tokenExpireTime, "")
 	}
 }
 
@@ -243,13 +259,26 @@ var signupHandler = func(w http.ResponseWriter, r *http.Request, d *data) (int, 
 }
 
 func renewHandler(tokenExpireTime time.Duration) handleFunc {
-	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+	return withUser(func(w http.ResponseWriter, _ *http.Request, d *data) (int, error) {
 		w.Header().Set("X-Renew-Token", "false")
-		return printToken(w, r, d, d.user, tokenExpireTime)
+		return printToken(w, d, d.user, tokenExpireTime, d.sessionID)
 	})
 }
 
-func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
+// logoutHandler revokes only the JWT presented on this request.
+var logoutHandler = withUser(func(_ http.ResponseWriter, _ *http.Request, d *data) (int, error) {
+	if err := d.store.Sessions.Revoke(d.sessionID); err != nil {
+		return http.StatusInternalServerError, err
+	}
+	return http.StatusNoContent, nil
+})
+
+func printToken(w http.ResponseWriter, d *data, user *users.User, tokenExpirationTime time.Duration, previousID string) (int, error) {
+	jti, err := newSessionID()
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	expiresAt := time.Now().Add(tokenExpirationTime)
 	claims := &authToken{
 		User: userInfo{
 			ID:                    user.ID,
@@ -264,16 +293,31 @@ func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.Use
 			DateFormat:            user.DateFormat,
 			Username:              user.Username,
 			AceEditorTheme:        user.AceEditorTheme,
+			SessionVersion:        user.SessionVersion,
 		},
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenExpirationTime)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			Issuer:    "File Browser",
+			ID:        jti,
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(d.settings.Key)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	next := sessions.Session{ID: jti, UserID: user.ID, ExpiresAt: expiresAt}
+	if previousID == "" {
+		err = d.store.Sessions.Create(next)
+	} else {
+		var rotated bool
+		rotated, err = d.store.Sessions.Rotate(previousID, next)
+		if err == nil && !rotated {
+			return http.StatusUnauthorized, nil
+		}
+	}
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
@@ -283,4 +327,12 @@ func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.Use
 		return http.StatusInternalServerError, err
 	}
 	return 0, nil
+}
+
+func newSessionID() (string, error) {
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
 }

@@ -6,10 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/asdine/storm/v3"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/spf13/afero"
 
 	"github.com/filebrowser/filebrowser/v2/files"
@@ -62,18 +60,8 @@ func TestTusHandlersRejectSymlinkScopeEscape(t *testing.T) {
 		fs:    files.NewScopedFs(afero.NewOsFs(), userScope),
 	}
 
-	// Forge a valid auth token for user ID 1.
-	claims := &authToken{
-		User: userInfo{ID: 1, Username: "u", Perm: users.Permissions{Create: true, Modify: true}},
-		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-time.Minute)),
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-		},
-	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(key)
-	if err != nil {
-		t.Fatalf("failed to sign token: %v", err)
-	}
+	// Use the same persisted JTI session requirement as production.
+	signed := signToken(t, st, users.Permissions{Create: true, Modify: true}, key)
 
 	cases := map[string]struct {
 		method  string

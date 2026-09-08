@@ -52,6 +52,8 @@ type tusTestFixture struct {
 	client *http.Client
 	token  string
 	scope  string
+	cache  UploadCache
+	store  *storage.Storage
 }
 
 func newTusTestFixture(t *testing.T) *tusTestFixture {
@@ -64,7 +66,7 @@ func newTusTestFixture(t *testing.T) *tusTestFixture {
 	}
 
 	key := []byte("test-signing-key")
-	perm := users.Permissions{Create: true, Modify: true}
+	perm := users.Permissions{Create: true, Modify: true, Delete: true, Rename: true}
 	st := scopedUserStorage(t, userScope, perm, key)
 
 	cache := newMemoryUploadCache()
@@ -74,8 +76,10 @@ func newTusTestFixture(t *testing.T) *tusTestFixture {
 	return &tusTestFixture{
 		srv:    srv,
 		client: srv.Client(),
-		token:  signToken(t, perm, key),
+		token:  signToken(t, st, perm, key),
 		scope:  userScope,
+		cache:  cache,
+		store:  st,
 	}
 }
 

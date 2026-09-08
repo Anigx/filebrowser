@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/filebrowser/filebrowser/v2/settings"
@@ -89,7 +88,10 @@ func (r *Runner) exec(raw, evt, path, dst string, user *users.User) error {
 		command[i] = os.Expand(arg, envMapping)
 	}
 
-	cmd := exec.Command(command[0], command[1:]...)
+	cmd, cancel, err := NewCommand(r.Settings, command)
+	if err != nil {
+		return err
+	}
 	cmd.Env = append(os.Environ(), fmt.Sprintf("FILE=%s", path))
 	cmd.Env = append(cmd.Env, fmt.Sprintf("SCOPE=%s", user.Scope))
 	cmd.Env = append(cmd.Env, fmt.Sprintf("TRIGGER=%s", evt))
@@ -97,13 +99,14 @@ func (r *Runner) exec(raw, evt, path, dst string, user *users.User) error {
 	cmd.Env = append(cmd.Env, fmt.Sprintf("DESTINATION=%s", dst))
 
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = LimitOutput(r.Settings, os.Stdout)
+	cmd.Stderr = LimitOutput(r.Settings, os.Stderr)
 
 	if !blocking {
 		log.Printf("[INFO] Nonblocking Command: \"%s\"", strings.Join(command, " "))
 		defer func() {
 			go func() {
+				defer cancel()
 				err := cmd.Wait()
 				if err != nil {
 					log.Printf("[INFO] Nonblocking Command \"%s\" failed: %s", strings.Join(command, " "), err)
@@ -113,6 +116,7 @@ func (r *Runner) exec(raw, evt, path, dst string, user *users.User) error {
 		return cmd.Start()
 	}
 
+	defer cancel()
 	log.Printf("[INFO] Blocking Command: \"%s\"", strings.Join(command, " "))
 	return cmd.Run()
 }

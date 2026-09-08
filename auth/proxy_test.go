@@ -55,7 +55,7 @@ func TestProxyAuthCreateUserRestrictsDefaults(t *testing.T) {
 	t.Parallel()
 
 	store := &mockUserStore{users: make(map[string]*users.User)}
-	srv := &settings.Server{Root: t.TempDir()}
+	srv := &settings.Server{Root: t.TempDir(), TrustedProxyIPs: []string{"192.0.2.0/24"}}
 
 	s := &settings.Settings{
 		Key:        []byte("key"),
@@ -78,6 +78,7 @@ func TestProxyAuthCreateUserRestrictsDefaults(t *testing.T) {
 	auth := ProxyAuth{Header: "X-Remote-User"}
 	req, _ := http.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.Header.Set("X-Remote-User", "newproxyuser")
+	req.RemoteAddr = "192.0.2.1:12345"
 
 	user, err := auth.Auth(req, store, s, srv)
 	if err != nil {
@@ -104,7 +105,7 @@ func TestProxyAuthCreateUserDirIsolatesScope(t *testing.T) {
 	t.Parallel()
 
 	store := &mockUserStore{users: make(map[string]*users.User)}
-	srv := &settings.Server{Root: t.TempDir()}
+	srv := &settings.Server{Root: t.TempDir(), TrustedProxyIPs: []string{"192.0.2.0/24"}}
 	s := &settings.Settings{
 		Key:              []byte("key"),
 		AuthMethod:       MethodProxyAuth,
@@ -120,6 +121,7 @@ func TestProxyAuthCreateUserDirIsolatesScope(t *testing.T) {
 	provision := func(name string) *users.User {
 		req, _ := http.NewRequest(http.MethodGet, "/", http.NoBody)
 		req.Header.Set("X-Remote-User", name)
+		req.RemoteAddr = "192.0.2.1:12345"
 		u, err := auth.Auth(req, store, s, srv)
 		if err != nil {
 			t.Fatalf("Auth(%q) error: %v", name, err)

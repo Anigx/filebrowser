@@ -112,6 +112,11 @@ func getFiles(d *data, path, commonPath string) ([]archives.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Opening a FIFO blocks until a writer connects. Archive generation must not
+	// let a readable directory entry turn into an indefinitely blocked request.
+	if files.IsNamedPipe(info.Mode()) {
+		return nil, nil
+	}
 
 	var archiveFiles []archives.FileInfo
 

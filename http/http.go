@@ -52,6 +52,7 @@ func NewHandler(
 	api.Handle("/login", monkey(loginHandler(tokenExpirationTime), ""))
 	api.Handle("/signup", monkey(signupHandler, ""))
 	api.Handle("/renew", monkey(renewHandler(tokenExpirationTime), ""))
+	api.Handle("/logout", monkey(logoutHandler, "")).Methods("POST")
 
 	users := api.PathPrefix("/users").Subrouter()
 	users.Handle("", monkey(usersGetHandler, "")).Methods("GET")
@@ -62,10 +63,10 @@ func NewHandler(
 
 	api.PathPrefix("/resources/recursive").Handler(monkey(resourceGetRecursiveHandler, "/api/resources/recursive")).Methods("GET")
 	api.PathPrefix("/resources").Handler(monkey(resourceGetHandler, "/api/resources")).Methods("GET")
-	api.PathPrefix("/resources").Handler(monkey(resourceDeleteHandler(fileCache), "/api/resources")).Methods("DELETE")
-	api.PathPrefix("/resources").Handler(monkey(resourcePostHandler(fileCache), "/api/resources")).Methods("POST")
-	api.PathPrefix("/resources").Handler(monkey(resourcePutHandler, "/api/resources")).Methods("PUT")
-	api.PathPrefix("/resources").Handler(monkey(resourcePatchHandler(fileCache), "/api/resources")).Methods("PATCH")
+	api.PathPrefix("/resources").Handler(monkey(withUploadCacheLease(uploadCache, resourceDeleteHandler(fileCache, uploadCache)), "/api/resources")).Methods("DELETE")
+	api.PathPrefix("/resources").Handler(monkey(withUploadCacheLease(uploadCache, resourcePostHandler(fileCache, uploadCache)), "/api/resources")).Methods("POST")
+	api.PathPrefix("/resources").Handler(monkey(withUploadCacheLease(uploadCache, resourcePutHandler), "/api/resources")).Methods("PUT")
+	api.PathPrefix("/resources").Handler(monkey(withUploadCacheLease(uploadCache, resourcePatchHandler(fileCache)), "/api/resources")).Methods("PATCH")
 
 	api.PathPrefix("/tus").Handler(monkey(tusPostHandler(uploadCache), "/api/tus")).Methods("POST")
 	api.PathPrefix("/tus").Handler(monkey(tusHeadHandler(uploadCache), "/api/tus")).Methods("HEAD", "GET")

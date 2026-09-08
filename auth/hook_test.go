@@ -39,6 +39,10 @@ func TestRunCommandNoCredentialInjection(t *testing.T) {
 	script := writeHookScript(t, "echo hook.action=block\n")
 
 	a := &HookAuth{
+		Settings: &settings.Settings{ExecutionSandbox: settings.ExecutionSandbox{
+			Enabled: true,
+			Command: []string{"/usr/bin/env", "--"},
+		}},
 		Command: script,
 		Cred: hookCred{
 			Username: `"; touch ` + marker + `; #`,
@@ -74,6 +78,10 @@ fi
 `)
 
 	a := &HookAuth{
+		Settings: &settings.Settings{ExecutionSandbox: settings.ExecutionSandbox{
+			Enabled: true,
+			Command: []string{"/usr/bin/env", "--"},
+		}},
 		Command: script,
 		Cred: hookCred{
 			Username: "alice",

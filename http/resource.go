@@ -22,6 +22,37 @@ import (
 	"github.com/spf13/afero"
 )
 
+const maxTextEncodingBytes = 10 << 20 // 10 MiB
+
+// openRegularFile verifies the object immediately before and after opening it.
+// The second check closes the stat/open race in which a regular file is swapped
+// for a device, FIFO, or directory after FileInfo has classified it. Readers
+// that buffer or parse content must never consume special files.
+func openRegularFile(file *files.FileInfo) (afero.File, error) {
+	info, err := file.Fs.Stat(file.Path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("refusing non-regular file: %w", fberrors.ErrInvalidRequestParams)
+	}
+
+	fd, err := file.Fs.Open(file.Path)
+	if err != nil {
+		return nil, err
+	}
+	info, err = fd.Stat()
+	if err != nil {
+		_ = fd.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = fd.Close()
+		return nil, fmt.Errorf("refusing non-regular file: %w", fberrors.ErrInvalidRequestParams)
+	}
+	return fd, nil
+}
+
 var resourceGetHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
@@ -49,15 +80,18 @@ var resourceGetHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 			return renderJSON(w, r, file)
 		}
 
-		f, err := d.user.Fs.Open(r.URL.Path)
+		f, err := openRegularFile(file)
 		if err != nil {
 			return errToStatus(err), err
 		}
 		defer f.Close()
 
-		data, err := io.ReadAll(f)
+		data, err := io.ReadAll(io.LimitReader(f, maxTextEncodingBytes+1))
 		if err != nil {
 			return http.StatusInternalServerError, err
+		}
+		if len(data) > maxTextEncodingBytes {
+			return http.StatusRequestEntityTooLarge, nil
 		}
 
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -85,7 +119,31 @@ var resourceGetHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 	return renderJSON(w, r, file)
 })
 
-func resourceDeleteHandler(fileCache FileCache) handleFunc {
+// withUploadCacheLease serializes normal resource mutations with TUS creation,
+// PATCH, and deletion. It records the pre-mutation real path, because a rename
+// or replacement can make the request pathname resolve to a different object
+// before the stale upload entry is invalidated.
+func withUploadCacheLease(cache UploadCache, next handleFunc) handleFunc {
+	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+		return withUploadLease(r.Context(), cache, func() (int, error) {
+			var realPath string
+			if file, err := files.NewFileInfo(&files.FileOptions{Fs: d.user.Fs, Path: r.URL.Path, Modify: d.user.Perm.Modify, Expand: false, ReadHeader: false, Checker: d}); err == nil {
+				realPath = file.RealPath()
+			}
+			status, err := next(w, r, d)
+			if status < http.StatusBadRequest && realPath != "" {
+				cache.InvalidatePathPrefix(realPath)
+			}
+			return status, err
+		})
+	})
+}
+
+func resourceDeleteHandler(fileCache FileCache, uploadCaches ...UploadCache) handleFunc {
+	var uploadCache UploadCache
+	if len(uploadCaches) != 0 {
+		uploadCache = uploadCaches[0]
+	}
 	return withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		if r.URL.Path == "/" || !d.user.Perm.Delete {
 			return http.StatusForbidden, nil
@@ -107,11 +165,6 @@ func resourceDeleteHandler(fileCache FileCache) handleFunc {
 			return errToStatus(err), err
 		}
 
-		err = d.store.Share.DeleteWithPathPrefix(file.Path, d.user.ID)
-		if err != nil {
-			log.Printf("WARNING: Error(s) occurred while deleting associated shares with file: %s", err)
-		}
-
 		// delete thumbnails
 		err = delThumbs(r.Context(), fileCache, file)
 		if err != nil {
@@ -126,11 +179,22 @@ func resourceDeleteHandler(fileCache FileCache) handleFunc {
 			return errToStatus(err), err
 		}
 
+		if err = d.store.Share.DeleteWithPathPrefix(file.Path, d.user.ID); err != nil {
+			log.Printf("WARNING: Error(s) occurred while deleting associated shares with file: %s", err)
+		}
+		if uploadCache != nil {
+			uploadCache.InvalidatePathPrefix(file.RealPath())
+		}
+
 		return http.StatusNoContent, nil
 	})
 }
 
-func resourcePostHandler(fileCache FileCache) handleFunc {
+func resourcePostHandler(fileCache FileCache, uploadCaches ...UploadCache) handleFunc {
+	var uploadCache UploadCache
+	if len(uploadCaches) != 0 {
+		uploadCache = uploadCaches[0]
+	}
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		if !d.user.Perm.Create || !d.Check(r.URL.Path) {
 			return http.StatusForbidden, nil
@@ -153,6 +217,9 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			Checker:    d,
 		})
 		if err == nil {
+			if file.IsDir {
+				return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", file.RealPath())
+			}
 			if r.URL.Query().Get("override") != "true" {
 				return http.StatusConflict, nil
 			}
@@ -161,11 +228,15 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			if !d.user.Perm.Modify {
 				return http.StatusForbidden, nil
 			}
+			if uploadCache != nil {
+				uploadCache.InvalidatePathPrefix(file.RealPath())
+			}
 
 			err = delThumbs(r.Context(), fileCache, file)
 			if err != nil {
 				return errToStatus(err), err
 			}
+
 		}
 
 		err = d.RunHook(func() error {
@@ -179,8 +250,11 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			return nil
 		}, "upload", r.URL.Path, "", d.user)
 
-		if err != nil {
-			_ = d.user.Fs.RemoveAll(r.URL.Path)
+		if err != nil && file == nil {
+			// A failed new-file upload may leave a partial file behind. Do not
+			// recursively remove a request path: it may be an existing directory
+			// or have been replaced concurrently.
+			_ = d.user.Fs.Remove(r.URL.Path)
 		}
 
 		return errToStatus(err), err
@@ -420,7 +494,13 @@ func patchAction(ctx context.Context, action, src, dst string, d *data, fileCach
 			return err
 		}
 
-		return fileutils.MoveFile(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode)
+		if err := fileutils.MoveFile(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode); err != nil {
+			return err
+		}
+		if err := d.store.Share.DeleteWithPathPrefix(src, d.user.ID); err != nil {
+			log.Printf("WARNING: Error(s) occurred while deleting associated shares with renamed file: %s", err)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported action %s: %w", action, fberrors.ErrInvalidRequestParams)
 	}

@@ -36,6 +36,10 @@ type User struct {
 	HideDotfiles          bool          `json:"hideDotfiles"`
 	DateFormat            bool          `json:"dateFormat"`
 	AceEditorTheme        string        `json:"aceEditorTheme"`
+	// SessionVersion is persisted and included in every token. Incrementing it
+	// revokes all previously issued sessions for this user, including after a
+	// process restart.
+	SessionVersion uint64 `json:"-"`
 }
 
 // GetRules implements rules.Provider.

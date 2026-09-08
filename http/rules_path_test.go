@@ -41,7 +41,7 @@ func TestRuleDeniesCaseVariantWhenFsIsCaseInsensitive(t *testing.T) {
 	key := []byte("test-signing-key")
 	perm := users.Permissions{Download: true}
 	st := denyRuleStorage(t, userScope, "/Secret.txt", perm, key)
-	signed := signToken(t, perm, key)
+	signed := signToken(t, st, perm, key)
 
 	get := func(path string, caseInsensitive bool) *httptest.ResponseRecorder {
 		req, _ := http.NewRequest(http.MethodGet, path, http.NoBody)
@@ -91,12 +91,42 @@ func TestRuleDeniesTraversalToDeniedPath(t *testing.T) {
 	st := denyRuleStorage(t, userScope, "/Secret.txt", perm, key)
 
 	req, _ := http.NewRequest(http.MethodGet, "/allow/../Secret.txt", http.NoBody)
-	req.Header.Set("X-Auth", signToken(t, perm, key))
+	req.Header.Set("X-Auth", signToken(t, st, perm, key))
 	rec := httptest.NewRecorder()
 	handle(rawHandler, "", st, &settings.Server{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("VULNERABLE: GET /allow/../Secret.txt = %d, body=%q; want 403", rec.Code, rec.Body.String())
+	}
+}
+
+// A symlink that remains inside the user's scope is legitimate filesystem
+// topology, but it must not provide a second, unruled name for a protected
+// target. The request is authorized before opening the file, so this exercises
+// resolution in the rule checker rather than relying on the scoped FS escape
+// guard (which correctly permits this in-scope link).
+func TestRuleDeniesInScopeSymlinkAliasToProtectedTarget(t *testing.T) {
+	userScope := t.TempDir()
+	if err := os.Mkdir(filepath.Join(userScope, "protected"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userScope, "protected", "secret.txt"), []byte("SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("protected", "secret.txt"), filepath.Join(userScope, "alias.txt")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	key := []byte("test-signing-key")
+	perm := users.Permissions{Download: true}
+	st := denyRuleStorage(t, userScope, "/protected/secret.txt", perm, key)
+	req := httptest.NewRequest(http.MethodGet, "/alias.txt", http.NoBody)
+	req.Header.Set("X-Auth", signToken(t, st, perm, key))
+	rec := httptest.NewRecorder()
+	handle(rawHandler, "", st, &settings.Server{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("VULNERABLE: GET /alias.txt = %d, body=%q; want 403", rec.Code, rec.Body.String())
 	}
 }
 
@@ -109,7 +139,7 @@ func TestCanonicalizeRequestPathKeepsTrailingSlash(t *testing.T) {
 	key := []byte("test-signing-key")
 	perm := users.Permissions{Create: true, Modify: true}
 	st := scopedUserStorage(t, userScope, perm, key)
-	signed := signToken(t, perm, key)
+	signed := signToken(t, st, perm, key)
 
 	t.Run("post creates a directory", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPost, "/newdir/", http.NoBody)
