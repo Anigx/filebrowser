@@ -1,9 +1,23 @@
 #!/bin/sh
+set -eu
 
-set -e
+# A Docker healthcheck does not inherit the entrypoint's CLI arguments. For
+# custom --config/--port/--baseURL/TLS/socket deployments, set the exact local
+# HTTP(S) health URL explicitly (or replace the healthcheck for Unix sockets).
+if [ -n "${FB_HEALTHCHECK_URL:-}" ]; then
+  exec wget -q --spider -- "$FB_HEALTHCHECK_URL"
+fi
 
-PORT=${FB_PORT:-$(jq -r .port /config/settings.json)}
-ADDRESS=${FB_ADDRESS:-$(jq -r .address /config/settings.json)}
-ADDRESS=${ADDRESS:-localhost}
-
-wget -q --spider http://$ADDRESS:$PORT/health || exit 1
+config_value() {
+  jq -r --arg key "$1" '.[$key] // empty' /config/settings.json
+}
+PORT=${FB_PORT:-$(config_value port)}
+ADDRESS=${FB_ADDRESS:-$(config_value address)}
+BASE_URL=${FB_BASE_URL:-$(config_value baseURL)}
+case "$ADDRESS" in
+  ""|0.0.0.0) ADDRESS=127.0.0.1 ;;
+  ::|\[::\]) ADDRESS='[::1]' ;;
+  *:*) case "$ADDRESS" in \[*\]) ;; *) ADDRESS="[$ADDRESS]" ;; esac ;;
+esac
+BASE_URL=${BASE_URL%/}
+exec wget -q --spider -- "http://$ADDRESS:${PORT:-80}${BASE_URL}/health"

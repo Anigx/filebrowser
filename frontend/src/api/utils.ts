@@ -1,5 +1,5 @@
 import { useAuthStore } from "@/stores/auth";
-import { renew, logout } from "@/utils/auth";
+import { renew, logout, getCurrentToken } from "@/utils/auth";
 import { baseURL } from "@/utils/constants";
 import { encodePath } from "@/utils/url";
 
@@ -20,6 +20,7 @@ export async function fetchURL(
   auth = true
 ): Promise<Response> {
   const authStore = useAuthStore();
+  const requestToken = auth ? await getCurrentToken() : authStore.jwt;
 
   opts = opts || {};
   opts.headers = opts.headers || {};
@@ -29,7 +30,7 @@ export async function fetchURL(
   try {
     res = await fetch(`${baseURL}${url}`, {
       headers: {
-        "X-Auth": authStore.jwt,
+        "X-Auth": requestToken,
         ...headers,
       },
       ...rest,
@@ -43,7 +44,7 @@ export async function fetchURL(
   }
 
   if (auth && res.headers.get("X-Renew-Token") === "true") {
-    await renew(authStore.jwt);
+    await renew(requestToken);
   }
 
   if (res.status < 200 || res.status > 299) {
@@ -53,7 +54,11 @@ export async function fetchURL(
       res.status
     );
 
-    if (auth && res.status == 401) {
+    if (
+      auth &&
+      res.status == 401 &&
+      requestToken === localStorage.getItem("jwt")
+    ) {
       logout();
     }
 
@@ -92,9 +97,13 @@ export function createURL(endpoint: string, searchParams = {}): string {
   return url.toString();
 }
 
-export function setSafeTimeout(callback: () => void, delay: number): number {
+export function setSafeTimeout(
+  callback: () => void,
+  delay: number
+): () => void {
   const MAX_DELAY = 86_400_000;
   let remaining = delay;
+  let timer: number;
 
   function scheduleNext(): number {
     if (remaining <= MAX_DELAY) {
@@ -102,10 +111,11 @@ export function setSafeTimeout(callback: () => void, delay: number): number {
     } else {
       return window.setTimeout(() => {
         remaining -= MAX_DELAY;
-        scheduleNext();
+        timer = scheduleNext();
       }, MAX_DELAY);
     }
   }
 
-  return scheduleNext();
+  timer = scheduleNext();
+  return () => clearTimeout(timer);
 }

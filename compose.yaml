@@ -1,32 +1,37 @@
 services:
   filebrowser:
-    container_name: filebrowser
-    image: filebrowser/filebrowser:latest
-    networks:
-      - filebrowser
+    # Use the local develop image by default. Set FILEBROWSER_IMAGE only when
+    # intentionally selecting a built or registry-hosted tag.
+    image: ${FILEBROWSER_IMAGE:-anigx/filebrowser:develop-local}
     ports:
-      - 8000:80
+      # Keep File Browser private to this host; expose it through a trusted
+      # reverse proxy or tunnel rather than binding it to every interface.
+      - "127.0.0.1:8000:80"
     volumes:
-      - filebrowser:/flux/vault
-    environment:
-      - FB_REDIS_CACHE_URL=redis://default:filebrowser@redis:6379 # Use rediss:// for ssl
-
-  redis:
-    container_name: redis
-    image: redis:latest
-    networks:
-      - filebrowser
-    command:
-      - sh
-      - -c
-      - |
-        cat > /tmp/users.acl <<EOF
-        user default on >filebrowser ~* +@all
-        EOF
-        redis-server --aclfile /tmp/users.acl
-
-networks:
-  filebrowser:
+      # Prepare this directory for the image's unprivileged UID/GID (1000:1000).
+      - type: bind
+        source: ./srv
+        target: /srv
+        bind:
+          create_host_path: false
+      - filebrowser-config:/config
+      - filebrowser-database:/database
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 512m
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
-  filebrowser:
+  filebrowser-config:
+  filebrowser-database:

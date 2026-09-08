@@ -1,6 +1,6 @@
 import * as tus from "tus-js-client";
 import { baseURL, tusEndpoint, tusSettings, origin } from "@/utils/constants";
-import { useAuthStore } from "@/stores/auth";
+import { getCurrentToken, renew } from "@/utils/auth";
 import { removePrefix } from "@/api/utils";
 import { effectiveTusChunkSize } from "./uploadLimits";
 
@@ -22,8 +22,6 @@ export async function upload(
   filePath = removePrefix(filePath);
   const resourcePath = `${tusEndpoint}${filePath}?override=${overwrite}`;
 
-  const authStore = useAuthStore();
-
   // Exit early because of typescript, tus content can't be a string
   if (content === "") {
     return false;
@@ -35,8 +33,15 @@ export async function upload(
       retryDelays: computeRetryDelays(tusSettings),
       parallelUploads: 1,
       storeFingerprintForResuming: false,
-      headers: {
-        "X-Auth": authStore.jwt,
+      onBeforeRequest: async (request) => {
+        const token = await getCurrentToken();
+        if (!token) throw new Error("Not authenticated");
+        request.setHeader("X-Auth", token);
+      },
+      onAfterResponse: async (request, response) => {
+        if (response.getHeader("X-Renew-Token") === "true") {
+          await renew(request.getHeader("X-Auth") || "");
+        }
       },
       onShouldRetry: function (err) {
         const status = err.originalResponse
@@ -44,7 +49,7 @@ export async function upload(
           : 0;
 
         // Do not retry for file conflict.
-        if (status === 409) {
+        if (status === 409 || status === 401 || status === 403) {
           return false;
         }
 

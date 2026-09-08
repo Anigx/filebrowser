@@ -1,32 +1,4 @@
-# Build the checked-out sources, never a host-provided binary or frontend dist.
-# For byte-for-byte rebuilds, override these with approved image@sha256 digests.
-ARG NODE_IMAGE=node:24-bookworm
-ARG GO_IMAGE=golang:1.25
-
-FROM ${NODE_IMAGE} AS frontend-deps
-WORKDIR /src/frontend
-RUN corepack enable
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
-
-FROM frontend-deps AS frontend-build
-COPY frontend/ ./
-RUN pnpm run build
-
-FROM ${GO_IMAGE} AS go-deps
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download && go mod verify
-
-FROM go-deps AS builder
-COPY . .
-COPY --from=frontend-build /src/frontend/dist ./frontend/dist
-ARG VERSION=develop
-ARG COMMIT_SHA=unknown
-RUN CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false \
-    -ldflags="-s -w -X github.com/filebrowser/filebrowser/v2/version.Version=${VERSION} -X github.com/filebrowser/filebrowser/v2/version.CommitSHA=${COMMIT_SHA}" \
-    -o /out/filebrowser .
-
+# Release packaging only: GoReleaser supplies the precompiled binary.
 ## Multistage build: First stage fetches dependencies
 FROM alpine:3.23 AS fetcher
 
@@ -47,7 +19,7 @@ RUN addgroup -g $GID user && \
     adduser -D -u $UID -G user user
 
 # Copy binary, scripts, and configurations into image with proper ownership
-COPY --from=builder --chown=user:user /out/filebrowser /bin/filebrowser
+COPY --chown=user:user filebrowser /bin/filebrowser
 COPY --chown=user:user docker/common/ /
 COPY --chown=user:user docker/alpine/ /
 COPY --chown=user:user --from=fetcher /sbin/tini-static /bin/tini
@@ -63,7 +35,7 @@ RUN mkdir -p /config /database /srv && \
     && chmod +x /healthcheck.sh
 
 # Define healthcheck script
-HEALTHCHECK --start-period=10s --interval=5s --timeout=3s CMD /healthcheck.sh
+HEALTHCHECK --start-period=2s --interval=5s --timeout=3s CMD /healthcheck.sh
 
 # Set the user, volumes and exposed ports
 USER user

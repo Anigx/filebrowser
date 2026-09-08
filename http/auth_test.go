@@ -75,86 +75,126 @@ func TestSignupRejectsCollidingNormalizedScope(t *testing.T) {
 	}
 }
 
-// Regression for GHSA-v3jv-rmh2-635j: under proxy auth with a non-default
-// logout page the JWT expiration is waived, because the proxy owns the session
-// lifetime. That exception used to apply to every route on the strength of the
-// token alone, so a token stolen before it expired kept working — and could be
-// renewed — indefinitely. The proxy must still assert the same identity.
-func TestExpiredTokenNeedsProxyAssertion(t *testing.T) {
+// Expiry is a hard boundary even with a matching trusted proxy identity and
+// a non-default logout page. A fresh proxy login, not an expired JWT renewal,
+// is the reauthentication contract.
+func TestProxySessionExpiryAndReauthentication(t *testing.T) {
 	const proxyHeader = "X-Fb-User"
-
 	key := []byte("test-signing-key")
 	perm := users.Permissions{Download: true}
 	st := scopedUserStorage(t, t.TempDir(), perm, key)
-
 	if err := st.Settings.Save(&settings.Settings{
-		Key:        key,
-		AuthMethod: fbAuth.MethodProxyAuth,
-		LogoutPage: "/logged-out",
+		Key: key, AuthMethod: fbAuth.MethodProxyAuth, LogoutPage: "/logged-out",
 	}); err != nil {
-		t.Fatalf("failed to save settings: %v", err)
+		t.Fatal(err)
 	}
 	if err := st.Auth.Save(&fbAuth.ProxyAuth{Header: proxyHeader}); err != nil {
-		t.Fatalf("failed to save auther: %v", err)
+		t.Fatal(err)
 	}
-
-	expiredJTI, err := newSessionID()
-	if err != nil {
-		t.Fatalf("failed to create JTI: %v", err)
-	}
-	expired := &authToken{
-		User: userInfo{ID: 1, Username: "u", Perm: perm},
-		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
-			ID:        expiredJTI,
-		},
-	}
-	expiredToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, expired).SignedString(key)
-	if err != nil {
-		t.Fatalf("failed to sign token: %v", err)
-	}
-	if err := st.Sessions.Create(sessions.Session{ID: expiredJTI, UserID: 1, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
-		t.Fatalf("failed to persist expired-token session: %v", err)
-	}
-
-	protected := withUser(func(w http.ResponseWriter, _ *http.Request, _ *data) (int, error) {
-		_, writeErr := w.Write([]byte("protected"))
-		return 0, writeErr
+	server := &settings.Server{TrustedProxyIPs: []string{"192.0.2.1"}}
+	protected := withUser(func(_ http.ResponseWriter, _ *http.Request, _ *data) (int, error) {
+		return http.StatusOK, nil
 	})
-
-	get := func(token, proxyUser string) *httptest.ResponseRecorder {
-		req, _ := http.NewRequest(http.MethodGet, "/", http.NoBody)
-		req.Header.Set("X-Auth", token)
-		if proxyUser != "" {
-			req.Header.Set(proxyHeader, proxyUser)
+	request := func(handler handleFunc, token, identity, peer string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r.RemoteAddr = peer
+		r.Header.Set("X-Auth", token)
+		r.Header.Set(proxyHeader, identity)
+		w := httptest.NewRecorder()
+		handle(handler, "", st, server).ServeHTTP(w, r)
+		return w
+	}
+	tokenFor := func(jwtExpiry, sessionExpiry time.Time, signingKey []byte, revoked bool) string {
+		id, err := newSessionID()
+		if err != nil {
+			t.Fatal(err)
 		}
-		rec := httptest.NewRecorder()
-		handle(protected, "", st, &settings.Server{}).ServeHTTP(rec, req)
-		return rec
+		claims := &authToken{User: userInfo{ID: 1, Username: "u", Perm: perm}, RegisteredClaims: jwt.RegisteredClaims{
+			ID: id, ExpiresAt: jwt.NewNumericDate(jwtExpiry),
+		}}
+		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(signingKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Sessions.Create(sessions.Session{ID: id, UserID: 1, ExpiresAt: sessionExpiry}); err != nil {
+			t.Fatal(err)
+		}
+		if revoked {
+			if err := st.Sessions.Revoke(id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return token
+	}
+	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
+	expired := tokenFor(past, past, key, false)
+	for name, token := range map[string]string{
+		"expired JWT and session": expired,
+		// An inconsistent store must never extend the signed JWT's lifetime.
+		"expired JWT with longer persisted session": tokenFor(past, future, key, false),
+		"valid JWT with expired session":            tokenFor(future, past, key, false),
+		"revoked session":                           tokenFor(future, future, key, true),
+		"expired and invalid signature":             tokenFor(past, future, []byte("wrong-key"), false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, identity := range []string{"", "someone-else", "u"} {
+				for _, peer := range []string{"192.0.2.1:1234", "198.51.100.1:1234"} {
+					for _, handler := range []handleFunc{protected, renewHandler(time.Hour), logoutHandler} {
+						rec := request(handler, token, identity, peer)
+						if rec.Code != http.StatusUnauthorized {
+							t.Fatalf("identity=%q peer=%q status=%d, want 401", identity, peer, rec.Code)
+						}
+						if hint := rec.Header().Get("X-Renew-Token"); hint != "" {
+							t.Fatalf("rejected token received renewal hint %q", hint)
+						}
+					}
+				}
+			}
+		})
+	}
+	// Existing unexpired bearer sessions remain compatible without proxy headers.
+	if rec := request(protected, signToken(t, st, perm, key), "", "198.51.100.1:1234"); rec.Code != http.StatusOK {
+		t.Fatalf("valid bearer token status=%d", rec.Code)
+	}
+	for _, tc := range []struct{ identity, peer string }{
+		{"u", "198.51.100.1:1234"}, {"", "192.0.2.1:1234"},
+	} {
+		if rec := request(loginHandler(time.Hour), expired, tc.identity, tc.peer); rec.Code != http.StatusForbidden {
+			t.Fatalf("unauthenticated proxy login status=%d, want 403", rec.Code)
+		}
+	}
+	rec := request(loginHandler(time.Hour), expired, "u", "192.0.2.1:1234")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fresh trusted proxy login status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	fresh := rec.Body.String()
+	if fresh == expired {
+		t.Fatal("proxy login reused expired token")
+	}
+	if rec := request(protected, fresh, "", "198.51.100.1:1234"); rec.Code != http.StatusOK {
+		t.Fatalf("fresh token status=%d", rec.Code)
+	}
+	if rec := request(logoutHandler, fresh, "u", "192.0.2.1:1234"); rec.Code != http.StatusNoContent {
+		t.Fatalf("logout status=%d", rec.Code)
+	}
+	for _, handler := range []handleFunc{protected, renewHandler(time.Hour), logoutHandler} {
+		if rec := request(handler, fresh, "u", "192.0.2.1:1234"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("logged-out token status=%d", rec.Code)
+		}
 	}
 
-	t.Run("expired token alone is rejected", func(t *testing.T) {
-		if rec := get(expiredToken, ""); rec.Code != http.StatusUnauthorized {
-			t.Errorf("VULNERABLE: expired token without the proxy header = %d, body=%q; want 401", rec.Code, rec.Body.String())
+	// Deletion invalidates access and renewal even if its JTI row remains.
+	deletedUserToken := signToken(t, st, perm, key)
+	if err := st.Users.Delete(uint(1)); err != nil {
+		t.Fatal(err)
+	}
+	for _, handler := range []handleFunc{protected, renewHandler(time.Hour), logoutHandler} {
+		rec := request(handler, deletedUserToken, "u", "192.0.2.1:1234")
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("deleted-user token status=%d, want 401", rec.Code)
 		}
-	})
-
-	t.Run("expired token for another identity is rejected", func(t *testing.T) {
-		if rec := get(expiredToken, "someone-else"); rec.Code != http.StatusUnauthorized {
-			t.Errorf("VULNERABLE: expired token with a foreign proxy identity = %d; want 401", rec.Code)
+		if rec.Header().Get("X-Renew-Token") != "" {
+			t.Fatal("deleted user received renewal hint")
 		}
-	})
-
-	t.Run("expired token the proxy still asserts is accepted", func(t *testing.T) {
-		if rec := get(expiredToken, "u"); rec.Code != http.StatusOK {
-			t.Errorf("expired token asserted by the proxy = %d, body=%q; want 200", rec.Code, rec.Body.String())
-		}
-	})
-
-	t.Run("valid token needs no assertion", func(t *testing.T) {
-		if rec := get(signToken(t, st, perm, key), ""); rec.Code != http.StatusOK {
-			t.Errorf("valid token = %d, body=%q; want 200", rec.Code, rec.Body.String())
-		}
-	})
+	}
 }

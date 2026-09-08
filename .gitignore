@@ -11,9 +11,14 @@ rice-box.go
 .DS_Store
 node_modules
 
-# local env files
-.env.local
-.env.*.local
+# Runtime data and deployment backups (may contain credentials).
+/srv/
+/backups/
+
+# local env files and deployment secrets
+.env
+.env.*
+!.env.example
 
 # Log files
 npm-debug.log*

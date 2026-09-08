@@ -14,10 +14,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/golang-jwt/jwt/v5/request"
 
-	fbAuth "github.com/filebrowser/filebrowser/v2/auth"
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/sessions"
-	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
 
@@ -70,53 +68,6 @@ func (e extractor) ExtractToken(r *http.Request) (string, error) {
 	return "", request.ErrNoTokenInRequest
 }
 
-func renewableErr(err error, r *http.Request, d *data, tk *authToken) bool {
-	if d.settings.AuthMethod != fbAuth.MethodProxyAuth || err == nil {
-		return false
-	}
-
-	if d.settings.LogoutPage == settings.DefaultLogoutPage {
-		return false
-	}
-
-	if !errors.Is(err, jwt.ErrTokenExpired) {
-		return false
-	}
-
-	// The expiration is only waived because the trusted proxy, not the token,
-	// decides when the session ends. Require the proxy to still assert the same
-	// identity on this request, otherwise a token that leaked before it expired
-	// would authenticate on its own forever.
-	return proxyAsserts(r, d, tk.User.ID)
-}
-
-// proxyAsserts reports whether the proxy-auth header on r identifies the user
-// the token was issued for. The username is resolved through the user store, so
-// that it is matched exactly as a regular proxy login would match it.
-func proxyAsserts(r *http.Request, d *data, id uint) bool {
-	auther, err := d.store.Auth.Get(fbAuth.MethodProxyAuth)
-	if err != nil {
-		return false
-	}
-
-	proxy, ok := auther.(*fbAuth.ProxyAuth)
-	if !ok || proxy.Header == "" {
-		return false
-	}
-
-	username := r.Header.Get(proxy.Header)
-	if username == "" {
-		return false
-	}
-
-	user, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, username)
-	if err != nil {
-		return false
-	}
-
-	return user.ID == id
-}
-
 func withUser(fn handleFunc) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		keyFunc := func(_ *jwt.Token) (interface{}, error) {
@@ -126,7 +77,10 @@ func withUser(fn handleFunc) handleFunc {
 		var tk authToken
 		p := jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
 		token, err := request.ParseFromRequest(r, &extractor{}, keyFunc, request.WithClaims(&tk), request.WithParser(p))
-		if (err != nil || !token.Valid) && !renewableErr(err, r, d, &tk) {
+		// Expired JWTs are never renewable, including under proxy auth. Clients
+		// must obtain a new session through /login, which checks the trusted peer
+		// and current proxy identity independently of the rejected token.
+		if err != nil || token == nil || !token.Valid {
 			return http.StatusUnauthorized, nil
 		}
 
@@ -141,16 +95,18 @@ func withUser(fn handleFunc) handleFunc {
 			return http.StatusUnauthorized, nil
 		}
 
-		if time.Until(tk.ExpiresAt.Time) < time.Hour {
-			w.Header().Add("X-Renew-Token", "true")
-		}
-
 		d.user, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, tk.User.ID)
+		if errors.Is(err, fberrors.ErrNotExist) {
+			return http.StatusUnauthorized, nil
+		}
 		if err != nil {
 			return http.StatusInternalServerError, err
 		}
 		if tk.User.SessionVersion != d.user.SessionVersion {
 			return http.StatusUnauthorized, nil
+		}
+		if time.Until(tk.ExpiresAt.Time) < time.Hour {
+			w.Header().Add("X-Renew-Token", "true")
 		}
 		d.sessionID = tk.ID
 
