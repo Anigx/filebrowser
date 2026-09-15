@@ -16,6 +16,7 @@ File Browser provides a file managing interface within a specified directory and
 - [Customization](customization.md)
 - [Authentication](authentication.md)
 - [Command Execution](command-execution.md)
+- [Security Status](security-status.md)
 - [Deployment](deployment.md)
 - [Troubleshooting](troubleshooting.md)
 - [Command Line Usage](cli/filebrowser.md)

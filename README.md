@@ -12,18 +12,27 @@ File Browser provides a file managing interface within a specified directory and
 
 ## Security
 
-Published advisories are listed under [security advisories](https://github.com/filebrowser/filebrowser/security/advisories),
-and reporting instructions are in [SECURITY.md](SECURITY.md). Two known issue classes
-remain unaddressed and will not be fixed:
+Upstream File Browser is archived. This fork maintains a documented, targeted
+hardening branch; it does **not** claim to replace an actively maintained
+upstream project. The precise advisory-to-fix-to-test mapping, residual risks,
+and release gate are in [`docs/security-status.md`](docs/security-status.md).
 
-- **Command execution, runner, and hooks.** This feature is plagued with vulnerabilities across many published advisories, and would need a full rewrite to be made safe. It is disabled by default; if you re-enable it with `--disable-exec=false`, treat the ability to run commands as equivalent to shell access on the host. Background: [#5199](https://github.com/filebrowser/filebrowser/issues/5199).
-- **Session and JWT handling.** Sessions are self-contained JWTs rather than server-side identifiers, so they cannot be revoked, which means that logout, password changes, and renewal leave previously issued tokens valid until they expire, and the same refresh token can be redeemed repeatedly. Assume a leaked token is valid until expiry. Background: [#5216](https://github.com/filebrowser/filebrowser/issues/5216).
+Published upstream advisories remain available from
+[GitHub Security Advisories](https://github.com/filebrowser/filebrowser/security/advisories).
+Report an issue in this fork using the included GitHub issue template; do not
+report fork-specific fixes to the archived upstream project.
 
-If you keep running File Browser, treat it as unmaintained software:
+For deployment:
 
-- **Do not expose it directly to the internet.** Put it behind a reverse proxy that terminates TLS and performs its own authentication.
-- **Keep the command runner disabled.** It is off by default, so leave it off. See [#5199](https://github.com/filebrowser/filebrowser/issues/5199) and [`docs/command-execution.md`](docs/command-execution.md).
-- **Run it unprivileged, inside a container**, with only the directory you intend to serve mounted into it.
+- **Do not expose File Browser directly to the internet.** Use a separate TLS
+  proxy with its own authentication and configure trusted proxy IPs explicitly.
+- **Keep commands, event hooks, and authentication hooks disabled.** The
+  supplied hardened image has no execution sandbox launcher and fails closed.
+  See [`docs/command-execution.md`](docs/command-execution.md).
+- **Run it unprivileged in the supplied hardened Compose profile**, mounting only
+  the directory intended for service. See [`docs/deployment.md`](docs/deployment.md).
+- **Treat a source commit, image ID and acceptance evidence as one release.** A
+  mutable local tag alone is not release provenance.
 
 ## Documentation
 

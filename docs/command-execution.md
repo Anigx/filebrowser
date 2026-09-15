@@ -1,54 +1,80 @@
-# Command Execution
+# Command execution and hooks
 
 > [!CAUTION]
 >
-> The **hook runner** and **interactive shell** functionalities have been disabled for all existent and new installations by default from version v2.33.8 and onwards, due to continuous and known security vulnerabilities. You should only use this feature if you are aware of all of the security risks involved. For more up to date information, consult issue [#5199](https://github.com/filebrowser/filebrowser/issues/5199).
+> Command execution converts File Browser into an execution broker. It is not a
+> normal file-management feature and must remain disabled unless there is a
+> separately reviewed operational requirement.
 
-## Hook Runner
+## Safe default in this fork
 
-The hook runner is a feature that enables you to execute any shell command you want before or after a certain event. Right now, these are the events:
+The supplied Docker image deliberately contains **no execution sandbox launcher**.
+All execution paths — interactive commands, event hooks, and authentication hooks
+— call the same `runner.NewCommand` boundary. It refuses every command unless a
+valid `executionSandbox` setting is enabled. There is no raw `os/exec` fallback.
 
-* Copy
-* Rename
-* Upload
-* Delete
-* Save
+Consequences for the standard Compose deployment:
 
-Also, during the execution of the commands set for those hooks, there will be some environment variables available to help you perform your commands:
+- `--disable-exec=false` alone does **not** enable command execution.
+- Adding a command in the UI or CLI does **not** enable command execution.
+- Enabling hook authentication without an independently provided sandbox causes
+  login to fail closed rather than running a host command.
+- There is intentionally no `EXECUTION_SANDBOX_*` environment variable in
+  Compose. The setting is persistent application state; a misleading runtime
+  variable must not appear to configure it.
 
-* `FILE` with the full absolute path to the changed file.
-* `SCOPE` with the path to user's scope.
-* `TRIGGER` with the name of the event.
-* `USERNAME` with the user's username.
-* `DESTINATION` with the absolute path to the destination. Only used for **copy** and **rename.**
+## When execution is genuinely required
 
-At this moment, you can edit the commands via the command line interface, using the following commands \(please check the flag `--help` to know more about them\):
+Do not modify the standard image or Compose profile in place. Build a separate,
+explicitly named deployment image and assess it as privileged infrastructure.
+The external launcher configured through `executionSandbox.command` must:
 
-```bash
-filebrowser cmds add before_copy "echo $FILE"
-filebrowser cmds rm before_copy 0
-filebrowser cmds ls
+1. be an absolute executable path and end in `--`; File Browser appends the
+   requested executable and its arguments after that delimiter;
+2. run the target as an unprivileged UID/GID;
+3. disable networking by default;
+4. expose only explicit read-only inputs and a minimal writable working area;
+5. enforce process-count, wall-clock, CPU, memory, and output limits; and
+6. deny capability escalation, device access, host mounts, and setuid paths.
+
+The launcher has to work with the actual container security profile. Namespace
+launchers often need kernel/Docker permissions that conflict with
+`no-new-privileges`, dropped capabilities, or Docker's seccomp policy. Do not
+weaken those controls merely to make a launcher start. If the launcher cannot be
+proven to isolate the command in the target environment, keep execution disabled.
+
+The server-side boundary also sets a default 30-second deadline and 1 MiB output
+limit. Those are defense in depth, **not** a substitute for OS-level isolation.
+
+## Hooks and command UI
+
+With a separately reviewed sandbox deployment, File Browser supports event hooks
+for copy, rename, upload, delete, and save. The interactive command UI remains
+limited to commands granted to the user. These controls decide *which* command
+may be requested; the external launcher decides whether it can safely execute.
+
+Authentication hooks are especially sensitive because they process credentials.
+The hook command receives `USERNAME` and `PASSWORD` via its environment. Treat
+that launcher and hook implementation as authentication infrastructure: prevent
+logging, network exfiltration, shell parsing of untrusted inputs, and inherited
+secrets. Prefer a supported external identity provider over auth hooks.
+
+## Verification gate for a custom execution image
+
+Before enabling execution for users, verify in an isolated test deployment:
+
+```sh
+go test ./runner ./auth ./http
+# Then run a deliberately harmless command through the real launcher and prove:
+# - no network route exists;
+# - the process has the intended UID/GID;
+# - forbidden files/devices are unavailable;
+# - timeout, process, and output limits terminate it;
+# - malformed launcher settings fail closed.
 ```
 
-Or you can use the web interface to manage them via **Settings** → **Global Settings**.
+Record the image digest, launcher version/configuration, kernel/Docker version,
+and the result. Re-run this gate whenever any of them changes.
 
-## Interactive Shell
-
-Within File Browser you can toggle the shell (`< >` icon at the top right) and this will open a shell command window at the bottom of the screen. This functionality can be turned on using the environment variable `FB_DISABLE_EXEC=false` or the flag `--disable-exec=false`.
-
-By default no commands are available as the command list is empty. To enable commands these need to either be done on a per-user basis (including for the Admin user).
-
-You can do this by adding them in Settings > User Management > (edit user) > Commands or to *apply to all new users created from that point forward* they can be set in Settings > Global Settings
-
-> [!NOTE]
-> 
-> If using a proxy manager then remember to enable websockets support for the File Browser proxy
-
-> [!NOTE]
-> 
-> If using Docker and you want to add a new command that is not in the base image then you will need to build a custom Docker image using `filebrowser/filebrowser` as a base image.  For example to add 7z:
-> 
-> ```docker
-> FROM filebrowser/filebrowser
-> RUN sudo apt install p7zip-full
-> ```
+For the fork-wide advisory mapping and residual risks, see
+[`security-status.md`](security-status.md).
