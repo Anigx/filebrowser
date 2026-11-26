@@ -95,6 +95,9 @@ options you want to change.`,
 		}
 
 		if password != "" {
+			if user.KeyOnly {
+				return users.ErrKeyOnlyAccount
+			}
 			user.Password, err = users.ValidateAndHashPwd(password, s.MinimumPasswordLength)
 			if err != nil {
 				return err

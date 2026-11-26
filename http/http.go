@@ -1,12 +1,14 @@
 package fbhttp
 
 import (
+	"errors"
 	"io/fs"
 	"net/http"
 
 	"github.com/gorilla/mux"
 	"github.com/spf13/afero"
 
+	"github.com/filebrowser/filebrowser/v2/auth"
 	"github.com/filebrowser/filebrowser/v2/files"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/storage"
@@ -26,6 +28,21 @@ func NewHandler(
 	server *settings.Server,
 	assetsFs fs.FS,
 ) (http.Handler, error) {
+	if store.SecurityKeys != nil {
+		set, err := store.Settings.Get()
+		if err != nil {
+			return nil, err
+		}
+		if set.AuthMethod != auth.MethodJSONAuth {
+			enrolled, err := store.SecurityKeys.Any()
+			if err != nil {
+				return nil, err
+			}
+			if enrolled {
+				return nil, errors.New("enrolled security keys require JSON authentication")
+			}
+		}
+	}
 	server.Clean()
 	server.CaseInsensitiveFs = files.CaseInsensitive(afero.NewOsFs(), server.Root)
 

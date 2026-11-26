@@ -35,8 +35,12 @@ you want to change. Other options will remain unchanged.`,
 		}
 
 		// Get updated config
+		previous := *set
 		auther, err = getSettings(flags, set, ser, auther, false)
 		if err != nil {
+			return err
+		}
+		if err := validateWebAuthnConfig(st, &previous, set); err != nil {
 			return err
 		}
 

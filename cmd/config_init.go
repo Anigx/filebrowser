@@ -34,6 +34,9 @@ override the options.`,
 		if err != nil {
 			return err
 		}
+		if err := validateWebAuthnConfig(st, nil, s); err != nil {
+			return err
+		}
 
 		// Save updated config
 		err = st.Settings.Save(s)

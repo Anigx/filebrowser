@@ -100,6 +100,7 @@ type Settings struct {
 	UserHomeBasePath      string              `json:"userHomeBasePath"`
 	Defaults              UserDefaults        `json:"defaults"`
 	AuthMethod            AuthMethod          `json:"authMethod"`
+	WebAuthnOrigin        string              `json:"webauthnOrigin,omitempty"`
 	LogoutPage            string              `json:"logoutPage"`
 	Branding              Branding            `json:"branding"`
 	Tus                   Tus                 `json:"tus"`

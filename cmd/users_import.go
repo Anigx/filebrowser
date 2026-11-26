@@ -50,6 +50,13 @@ list or set it to 0.`,
 		if err != nil {
 			return err
 		}
+		overwrite, err := flags.GetBool("overwrite")
+		if err != nil {
+			return err
+		}
+		if err := guardUserImport(st, list, replace, overwrite); err != nil {
+			return err
+		}
 
 		if replace {
 			oldUsers, userImportErr := st.Users.Gets("", false)
@@ -70,16 +77,12 @@ list or set it to 0.`,
 			}
 		}
 
-		overwrite, err := flags.GetBool("overwrite")
-		if err != nil {
-			return err
-		}
-
 		for _, user := range list {
 			onDB, err := st.Users.Get("", false, user.ID)
 
 			// User exists in DB.
 			if err == nil {
+				user.SessionVersion = onDB.SessionVersion
 				if !overwrite {
 					return errors.New("user " + strconv.Itoa(int(user.ID)) + " is already registered")
 				}

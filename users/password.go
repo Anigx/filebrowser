@@ -3,11 +3,22 @@ package users
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 
 	"golang.org/x/crypto/bcrypt"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 )
+
+func NewPasswordAfterKeyRemoval(newPassword, retiredHash string, minimum uint) (string, error) {
+	if newPassword == "" {
+		return "", fberrors.ErrEmptyPassword
+	}
+	if CheckPwd(newPassword, retiredHash) {
+		return "", errors.New("choose a different password from the one used before enrollment")
+	}
+	return ValidateAndHashPwd(newPassword, minimum)
+}
 
 // ValidateAndHashPwd validates and hashes a password.
 func ValidateAndHashPwd(password string, minimumLength uint) (string, error) {

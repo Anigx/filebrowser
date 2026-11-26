@@ -46,6 +46,7 @@ func addConfigFlags(flags *pflag.FlagSet) {
 	flags.String("auth.header", "", "HTTP header for auth.method=proxy")
 	flags.String("auth.command", "", "command for auth.method=hook")
 	flags.String("auth.logoutPage", "", "url of custom logout page")
+	flags.String("webauthn.origin", "", "public HTTPS origin for passwordless security keys (JSON auth only)")
 
 	flags.String("recaptcha.host", "https://www.google.com", "use another host for ReCAPTCHA. recaptcha.net might be useful in China")
 	flags.String("recaptcha.key", "", "ReCaptcha site key")
@@ -340,6 +341,8 @@ func getSettings(flags *pflag.FlagSet, set *settings.Settings, ser *settings.Ser
 			hasAuth = true
 		case "auth.logoutPage":
 			set.LogoutPage, err = flags.GetString(flag.Name)
+		case "webauthn.origin":
+			set.WebAuthnOrigin, err = flags.GetString(flag.Name)
 		case "branding.name":
 			set.Branding.Name, err = flags.GetString(flag.Name)
 		case "branding.theme":
