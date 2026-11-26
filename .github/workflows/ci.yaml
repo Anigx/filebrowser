@@ -7,6 +7,7 @@ on:
     tags:
       - "v*"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -96,7 +97,7 @@ jobs:
   acceptance:
     name: Deployment and browser acceptance
     needs: [build]
-    if: github.repository == 'Anigx/filebrowser' && github.event_name == 'push'
+    if: github.repository == 'Anigx/filebrowser' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -152,7 +153,7 @@ jobs:
   release:
     name: Release
     needs: [lint-frontend, test-frontend, lint-backend, test, build, acceptance]
-    if: github.repository == 'Anigx/filebrowser' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'Anigx/filebrowser' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     runs-on: ubuntu-latest
