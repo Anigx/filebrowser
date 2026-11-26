@@ -38,6 +38,24 @@ func TestWebAuthnChallengeLifecycle(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestWebAuthnProofBoundToActionTargetAndSession(t *testing.T) {
+	a := &securityKeyAuth{cache: newKeyChallengeCache()}
+	d := &data{user: &users.User{ID: 1, KeyOnly: true, SessionVersion: 3, Perm: users.Permissions{Admin: true}}, sessionID: "current"}
+	proof, err := a.cache.put(keyChallenge{
+		purpose: "proof", action: "reset-keys", actorID: 1, actorEpoch: 3, targetID: 2, targetEpoch: 5, sessionID: "current",
+	}, time.Minute)
+	require.NoError(t, err)
+	require.False(t, a.fresh(d, keyAction{Action: "update-user", TargetID: 2}, 5, "", proof))
+	require.False(t, a.fresh(d, keyAction{Action: "reset-keys", TargetID: 3}, 5, "", proof))
+	require.False(t, a.fresh(d, keyAction{Action: "reset-keys", TargetID: 2}, 6, "", proof))
+	d.sessionID = "rotated"
+	require.False(t, a.fresh(d, keyAction{Action: "reset-keys", TargetID: 2}, 5, "", proof))
+	d.sessionID = "current"
+	op := keyAction{Action: "reset-keys", TargetID: 2}
+	require.True(t, a.fresh(d, op, 5, "", proof))
+	require.False(t, a.fresh(d, op, 5, "", proof))
+}
+
 func TestWebAuthnLoginAuthorization(t *testing.T) {
 	st := sessionTestStorage(t, []byte("test-webauthn-session"))
 	require.NoError(t, st.Settings.Save(&settings.Settings{

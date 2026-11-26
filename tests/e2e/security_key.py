@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -129,6 +130,10 @@ def run():
                     add_key(user, "Backup key")
                     user.unroute("**/api/webauthn/register/start", use_backup)
                     stop(process)
+                    # Cold-copy the database to a new file and open only the copy.
+                    restored = str(tmp / "restored.db")
+                    shutil.copyfile(database, restored)
+                    opt[-1] = restored
                     process = start()
                     login(user, "fixture-user")
                     user.goto(base + "/settings/profile")
@@ -136,7 +141,14 @@ def run():
                     expect(user.get_by_role("listitem").filter(has_text="Backup key")).to_be_visible()
 
                     login(admin, "fixture-admin", admin_password)
+                    admin_token = admin.evaluate("localStorage.getItem('jwt')")
+                    lock = admin.request.put(base + "/api/users/2", headers={"X-Auth": admin_token}, data={
+                        "what": "user", "which": ["lockPassword"], "current_password": admin_password,
+                        "data": {"id": 2, "lockPassword": True},
+                    })
+                    assert lock.ok
                     admin.goto(base + "/settings/users/2")
+                    expect(admin.locator("#password")).to_have_count(0)
                     row = admin.get_by_role("listitem").filter(has_text="Primary key")
                     row.get_by_role("button", name="Remove key").click()
                     admin.get_by_label("Your Current Password", exact=True).fill(admin_password)
@@ -149,6 +161,9 @@ def run():
                     admin_cdp.send("WebAuthn.addVirtualAuthenticator", {"options": authenticator})
                     add_key(admin, "Admin key", admin_password)
                     login(admin, "fixture-admin")
+                    user.evaluate("localStorage.removeItem('jwt')")
+                    login(user, "fixture-user")
+                    stale_token = user.evaluate("localStorage.getItem('jwt')")
                     admin.goto(base + "/settings/users/2")
                     admin.get_by_role("button", name="Reset security keys").click()
                     expect(admin.get_by_label("Your Current Password", exact=True)).to_have_count(0)
@@ -156,7 +171,6 @@ def run():
                     admin.get_by_label("Confirm your new password", exact=True).fill(new_password)
                     admin.get_by_role("button", name="Set new password and remove keys").click()
                     expect(admin.get_by_text("No security keys are registered.")).to_be_visible()
-                    stale_token = user.evaluate("localStorage.getItem('jwt')")
                     assert user.request.get(base + "/api/users/2", headers={"X-Auth": stale_token}).status == 401
                     assert user.request.post(base + "/api/login", data=password_body).status == 403
                     assert user.request.post(base + "/api/login", data={

@@ -108,10 +108,6 @@ onMounted(() => {
 const isNew = computed(() => route.path === "/settings/users/new");
 
 watch(route, () => fetchData());
-watch(user, () => {
-  if (!user.value?.perm.admin) return;
-  user.value.lockPassword = false;
-});
 
 const fetchData = async () => {
   layoutStore.loading = true;

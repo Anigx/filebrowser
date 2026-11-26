@@ -48,7 +48,7 @@ func (a *securityKeyAuth) guard(fn handleFunc, anonymous bool) handleFunc {
 		if a == nil || d.settings.AuthMethod != auth.MethodJSONAuth {
 			return http.StatusNotFound, nil
 		}
-		if origin := r.Header.Get("Origin"); origin != "" && origin != a.origin {
+		if origin := r.Header.Get("Origin"); origin != "" && !a.matchesOrigin(origin) {
 			return http.StatusForbidden, nil
 		}
 		if anonymous && !a.cache.allowAnonymous(r.RemoteAddr) {
@@ -57,6 +57,11 @@ func (a *securityKeyAuth) guard(fn handleFunc, anonymous bool) handleFunc {
 		d.authNoRenew = true
 		return fn(w, r, d)
 	}
+}
+
+func (a *securityKeyAuth) matchesOrigin(origin string) bool {
+	normalized, _, err := auth.NormalizeWebAuthnOrigin(origin)
+	return err == nil && normalized == a.origin
 }
 
 func decodeKeyRequest(w http.ResponseWriter, r *http.Request, out any) bool {
@@ -104,7 +109,7 @@ func (a *securityKeyAuth) loginStart(w http.ResponseWriter, r *http.Request, d *
 		Username  string `json:"username"`
 		ReCaptcha string `json:"recaptcha"`
 	}
-	if !decodeKeyRequest(w, r, &req) || req.Username == "" || len(req.Username) > 256 {
+	if !decodeKeyRequest(w, r, &req) || req.Username == "" || len(req.Username) > users.MaxSecurityKeyUsernameBytes {
 		return http.StatusBadRequest, nil
 	}
 	provider, err := d.store.Auth.Get(auth.MethodJSONAuth)
@@ -140,7 +145,7 @@ func (a *securityKeyAuth) assertion(d *data, c keyChallenge, raw []byte) (*users
 		return nil, false
 	}
 	parsed, err := protocol.ParseCredentialRequestResponseBytes(raw)
-	if err != nil {
+	if err != nil || !a.matchesOrigin(parsed.Response.CollectedClientData.Origin) {
 		return nil, false
 	}
 	updated, err := a.wa.ValidateLogin(webAuthnUser{user.Username, state}, c.session, parsed)
@@ -233,6 +238,12 @@ func matchKeyActor(d *data, c keyChallenge, purpose string) bool {
 		c.sessionID == d.sessionID
 }
 
+func accountWriteApproval(d *data, targetEpoch uint64) users.WriteApproval {
+	return users.WriteApproval{
+		ActorID: d.user.ID, ActorEpoch: d.user.SessionVersion, SessionID: d.sessionID, TargetEpoch: targetEpoch,
+	}
+}
+
 func (a *securityKeyAuth) verifyFinish(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	var req keyFinishRequest
 	if !decodeKeyRequest(w, r, &req) {
@@ -284,6 +295,9 @@ func (a *securityKeyAuth) registerStart(w http.ResponseWriter, r *http.Request, 
 	if label == "" || len(label) > 80 {
 		return http.StatusBadRequest, nil
 	}
+	if len(d.user.Username) > users.MaxSecurityKeyUsernameBytes {
+		return http.StatusBadRequest, errors.New("username is too long for security-key login")
+	}
 	state, err := d.store.SecurityKeys.Get(d.user.ID)
 	if err != nil {
 		return http.StatusInternalServerError, err
@@ -329,14 +343,14 @@ func (a *securityKeyAuth) registerFinish(w http.ResponseWriter, r *http.Request,
 	}
 	state.Handle = c.handle
 	parsed, err := protocol.ParseCredentialCreationResponseBytes(req.Credential)
-	if err != nil {
+	if err != nil || !a.matchesOrigin(parsed.Response.CollectedClientData.Origin) {
 		return http.StatusForbidden, nil
 	}
 	credential, err := a.wa.CreateCredential(webAuthnUser{d.user.Username, state}, c.session, parsed)
 	if err != nil {
 		return http.StatusForbidden, nil
 	}
-	err = d.store.SecurityKeys.Change(d.user.ID, c.actorEpoch, func(current *users.User, state *users.SecurityState) error {
+	err = d.store.SecurityKeys.ChangeApproved(accountWriteApproval(d, c.actorEpoch), d.user.ID, func(current *users.User, state *users.SecurityState) error {
 		if current.LockPassword && len(state.Keys) == 0 {
 			return fberrors.ErrPermissionDenied
 		}
@@ -405,7 +419,7 @@ func (a *securityKeyAuth) remove(w http.ResponseWriter, r *http.Request, d *data
 			return http.StatusBadRequest, nil
 		}
 	}
-	err = d.store.SecurityKeys.Change(target, state.Epoch, func(current *users.User, state *users.SecurityState) error {
+	err = d.store.SecurityKeys.ChangeApproved(accountWriteApproval(d, state.Epoch), target, func(current *users.User, state *users.SecurityState) error {
 		if req.KeyID == "" {
 			if target == d.user.ID && current.LockPassword {
 				return fberrors.ErrPermissionDenied

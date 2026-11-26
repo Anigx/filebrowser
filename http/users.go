@@ -56,7 +56,10 @@ func getUser(_ http.ResponseWriter, r *http.Request) (*modifyUserRequest, error)
 
 	req := &modifyUserRequest{}
 	err := json.NewDecoder(r.Body).Decode(req)
-	if err != nil {
+	if err != nil || req.Data == nil || req.Data.ID != 0 && r.Method == http.MethodPost {
+		if err == nil {
+			return nil, fberrors.ErrInvalidDataType
+		}
 		return nil, err
 	}
 
@@ -133,7 +136,7 @@ var userDeleteHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Requ
 
 	target := d.raw.(uint)
 	var epoch uint64
-	if d.user.KeyOnly {
+	if d.store.SecurityKeys != nil {
 		var err error
 		epoch, err = keyTargetEpoch(d, target)
 		if err != nil {
@@ -144,8 +147,16 @@ var userDeleteHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Requ
 		return code, err
 	}
 
-	err := d.store.Users.Delete(d.raw.(uint))
+	var err error
+	if d.store.SecurityKeys != nil {
+		err = d.store.SecurityKeys.DeleteApproved(accountWriteApproval(d, epoch), target)
+	} else {
+		err = d.store.Users.Delete(target)
+	}
 	if err != nil {
+		if errors.Is(err, users.ErrStaleSecurityState) || errors.Is(err, fberrors.ErrPermissionDenied) {
+			return securityKeyChangeError(err)
+		}
 		return errToStatus(err), err
 	}
 
@@ -187,8 +198,15 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 	req.Data.Scope = userHome
 	log.Printf("user: %s, home dir: [%s].", req.Data.Username, userHome)
 
-	err = d.store.Users.Save(req.Data)
+	if d.store.SecurityKeys != nil {
+		err = d.store.SecurityKeys.InsertApproved(accountWriteApproval(d, 0), req.Data)
+	} else {
+		err = d.store.Users.Save(req.Data)
+	}
 	if err != nil {
+		if errors.Is(err, fberrors.ErrPermissionDenied) {
+			return http.StatusForbidden, nil
+		}
 		return http.StatusInternalServerError, err
 	}
 
@@ -280,8 +298,15 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	err = d.store.Users.Update(req.Data, req.Which...)
+	if needsProof && d.store.SecurityKeys != nil {
+		err = d.store.SecurityKeys.UpdateApproved(accountWriteApproval(d, targetUser.SessionVersion), req.Data, req.Which...)
+	} else {
+		err = d.store.Users.Update(req.Data, req.Which...)
+	}
 	if err != nil {
+		if errors.Is(err, fberrors.ErrPermissionDenied) || errors.Is(err, fberrors.ErrInvalidDataType) {
+			return securityKeyChangeError(err)
+		}
 		if errors.Is(err, users.ErrStaleSecurityState) || errors.Is(err, users.ErrKeyOnlyAccount) {
 			return http.StatusConflict, err
 		}

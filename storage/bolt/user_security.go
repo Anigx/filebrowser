@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	bolt "go.etcd.io/bbolt"
@@ -77,7 +78,18 @@ func (s userSecurityBackend) Any() (ok bool, err error) {
 }
 
 func (s userSecurityBackend) Change(id uint, epoch uint64, apply func(*users.User, *users.SecurityState) error) error {
+	return s.change(id, epoch, nil, apply)
+}
+
+func (s userSecurityBackend) ChangeApproved(approval users.WriteApproval, id uint, apply func(*users.User, *users.SecurityState) error) error {
+	return s.change(id, approval.TargetEpoch, &approval, apply)
+}
+
+func (s userSecurityBackend) change(id uint, epoch uint64, approval *users.WriteApproval, apply func(*users.User, *users.SecurityState) error) error {
 	return s.db.Bolt.Update(func(tx *bolt.Tx) error {
+		if err := s.checkApproval(tx, approval, id); err != nil {
+			return err
+		}
 		user, err := s.getBy(tx, id)
 		if err != nil {
 			return err
@@ -119,7 +131,7 @@ func (s userSecurityBackend) Change(id uint, epoch uint64, apply func(*users.Use
 			state.Handle, state.RetiredHash = previousState.Handle, previousState.RetiredHash
 		}
 		if len(state.Keys) != 0 {
-			if len(state.Handle) != 32 || state.RetiredHash == "" {
+			if len(state.Handle) != 32 || state.RetiredHash == "" || len(user.Username) > users.MaxSecurityKeyUsernameBytes {
 				return fberrors.ErrInvalidDataType
 			}
 			seen := make(map[string]bool, len(state.Keys))
@@ -137,6 +149,64 @@ func (s userSecurityBackend) Change(id uint, epoch uint64, apply func(*users.Use
 		}
 		return writeUserSecurity(tx, id, state)
 	})
+}
+
+func (s usersBackend) checkApproval(tx *bolt.Tx, approval *users.WriteApproval, target uint) error {
+	if approval == nil {
+		return nil
+	}
+	bucket := tx.Bucket(sessionBucket)
+	if bucket == nil || approval.SessionID == "" || approval.ActorID == 0 {
+		return fberrors.ErrPermissionDenied
+	}
+	raw := bucket.Get([]byte(approval.SessionID))
+	if raw == nil {
+		return fberrors.ErrPermissionDenied
+	}
+	var session storedSession
+	if err := json.Unmarshal(raw, &session); err != nil {
+		return err
+	}
+	if session.UserID != approval.ActorID || session.ExpiresAt <= time.Now().Unix() {
+		return fberrors.ErrPermissionDenied
+	}
+	actor, err := s.getBy(tx, approval.ActorID)
+	if err != nil {
+		return err
+	}
+	if err := hydrateUserSecurity(tx, actor); err != nil {
+		return err
+	}
+	if actor.SessionVersion != approval.ActorEpoch || (actor.ID != target && !actor.Perm.Admin) {
+		return fberrors.ErrPermissionDenied
+	}
+	return nil
+}
+
+func (s userSecurityBackend) InsertApproved(approval users.WriteApproval, user *users.User) error {
+	if user.ID != 0 {
+		return fberrors.ErrInvalidDataType
+	}
+	if err := user.Clean("", false); err != nil {
+		return err
+	}
+	return s.db.Bolt.Update(func(tx *bolt.Tx) error {
+		if err := s.checkApproval(tx, &approval, 0); err != nil {
+			return err
+		}
+		return s.saveUser(tx, user)
+	})
+}
+
+func (s userSecurityBackend) UpdateApproved(approval users.WriteApproval, user *users.User, fields ...string) error {
+	if err := user.Clean("", false, fields...); err != nil {
+		return err
+	}
+	return s.updateApproved(user, &approval, fields...)
+}
+
+func (s userSecurityBackend) DeleteApproved(approval users.WriteApproval, id uint) error {
+	return s.deleteApproved(id, &approval)
 }
 
 func (s userSecurityBackend) UpdateCredential(id uint, epoch uint64, previous, verified webauthn.Credential) error {

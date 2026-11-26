@@ -105,14 +105,6 @@ const displayHomeDirectoryCheckbox = computed(
   () => props.isNew && createUserDirData.value
 );
 
-watch(
-  () => props.user,
-  () => {
-    if (!props.user?.perm?.admin) return;
-    props.user.lockPassword = false;
-  }
-);
-
 watch(createUserDirData, () => {
   if (props.user?.scope) {
     props.user.scope = createUserDirData.value

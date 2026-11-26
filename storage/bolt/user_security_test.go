@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
+	"github.com/filebrowser/filebrowser/v2/sessions"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
 
@@ -30,7 +32,7 @@ func TestSecurityStateAtomicAndPrivate(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, initial.Epoch)
 
-	enroll := func(account *users.User, state *users.SecurityState) error {
+	enroll := func(_ *users.User, state *users.SecurityState) error {
 		state.Handle = []byte("01234567890123456789012345678901")
 		state.Keys = []users.SecurityKey{{
 			Label: "test key", CreatedAt: time.Now(),
@@ -69,6 +71,7 @@ func TestSecurityStateAtomicAndPrivate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "previous-hash", state.RetiredHash)
 	require.Len(t, state.Keys, 1)
+	require.ErrorIs(t, st.Users.Update(&users.User{ID: u.ID, Username: strings.Repeat("a", 257)}, "Username"), fberrors.ErrInvalidDataType)
 
 	original := state.Keys[0].Credential
 	verified := original
@@ -115,4 +118,28 @@ func TestSecurityStateAtomicAndPrivate(t *testing.T) {
 	require.NoError(t, st.Users.Delete(u.ID))
 	_, err = st.SecurityKeys.Get(u.ID)
 	require.ErrorIs(t, err, fberrors.ErrNotExist)
+}
+
+func TestAccountWriteChecksSessionAndTargetAtCommit(t *testing.T) {
+	db, err := storm.Open(filepath.Join(t.TempDir(), "db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	st, err := NewStorage(db)
+	require.NoError(t, err)
+	admin := &users.User{Username: "admin", Password: "hash", Perm: users.Permissions{Admin: true}}
+	target := &users.User{Username: "target", Password: "hash"}
+	require.NoError(t, st.Users.Save(admin))
+	require.NoError(t, st.Users.Save(target))
+	require.NoError(t, st.Sessions.Create(sessions.Session{ID: "live", UserID: admin.ID, ExpiresAt: time.Now().Add(time.Hour)}))
+	approval := users.WriteApproval{ActorID: admin.ID, SessionID: "live"}
+	require.ErrorIs(t, st.SecurityKeys.InsertApproved(approval, target), fberrors.ErrInvalidDataType)
+	require.NoError(t, st.SecurityKeys.UpdateApproved(approval, &users.User{ID: target.ID, Scope: "/new"}, "Scope"))
+	require.ErrorIs(t, st.SecurityKeys.UpdateApproved(approval, &users.User{ID: target.ID, Scope: "/stale"}, "Scope"), users.ErrStaleSecurityState)
+	require.NoError(t, st.Sessions.Revoke("live"))
+	approval.TargetEpoch = 1
+	require.Error(t, st.SecurityKeys.DeleteApproved(approval, target.ID))
+	require.Error(t, st.SecurityKeys.InsertApproved(approval, &users.User{Username: "fresh", Password: "hash"}))
+	got, err := st.Users.Get("", false, target.ID)
+	require.NoError(t, err)
+	require.Equal(t, "/new", got.Scope)
 }

@@ -111,10 +111,17 @@ func (st usersBackend) Gets() ([]*users.User, error) {
 }
 
 func (st usersBackend) Update(user *users.User, fields ...string) error {
+	return st.updateApproved(user, nil, fields...)
+}
+
+func (st usersBackend) updateApproved(user *users.User, approval *users.WriteApproval, fields ...string) error {
 	var next *users.User
 	var epoch uint64
 	var keyOnly bool
 	err := st.db.Bolt.Update(func(tx *bolt.Tx) error {
+		if err := st.checkApproval(tx, approval, user.ID); err != nil {
+			return err
+		}
 		current, err := st.getBy(tx, user.ID)
 		if err != nil {
 			return err
@@ -122,6 +129,9 @@ func (st usersBackend) Update(user *users.User, fields ...string) error {
 		state, err := readUserSecurity(tx, user.ID)
 		if err != nil {
 			return err
+		}
+		if approval != nil && approval.TargetEpoch != state.Epoch {
+			return users.ErrStaleSecurityState
 		}
 		oldPassword := current.Password
 		next = current
@@ -136,6 +146,9 @@ func (st usersBackend) Update(user *users.User, fields ...string) error {
 		}
 		if keyOnly && next.Password != oldPassword {
 			return users.ErrKeyOnlyAccount
+		}
+		if keyOnly && len(next.Username) > users.MaxSecurityKeyUsernameBytes {
+			return fberrors.ErrInvalidDataType
 		}
 		if err := st.saveUser(tx, next); err != nil {
 			return err
@@ -201,10 +214,34 @@ func (st usersBackend) DeleteByUsername(username string) error {
 }
 
 func (st usersBackend) deleteBy(id any) error {
+	return st.deleteApproved(id, nil)
+}
+
+func (st usersBackend) deleteApproved(id any, approval *users.WriteApproval) error {
 	return st.db.Bolt.Update(func(tx *bolt.Tx) error {
 		user, err := st.getBy(tx, id)
 		if err != nil {
 			return err
+		}
+		if err := st.checkApproval(tx, approval, user.ID); err != nil {
+			return err
+		}
+		if approval != nil {
+			if err := hydrateUserSecurity(tx, user); err != nil {
+				return err
+			}
+			if user.SessionVersion != approval.TargetEpoch {
+				return users.ErrStaleSecurityState
+			}
+			if user.Perm.Admin {
+				count, err := st.countAdmins(tx)
+				if err != nil {
+					return err
+				}
+				if count <= 1 {
+					return fberrors.ErrRootUserDeletion
+				}
+			}
 		}
 		if err := st.db.WithTransaction(tx).DeleteStruct(user); err != nil {
 			return err
@@ -218,26 +255,29 @@ func (st usersBackend) deleteBy(id any) error {
 
 func (st usersBackend) CountAdmins() (int, error) {
 	count := 0
-
 	err := st.db.Bolt.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte(reflect.TypeOf(users.User{}).Name()))
-		if bucket == nil {
-			return nil
-		}
-
-		c := bucket.Cursor()
-		for _, v := c.First(); v != nil; _, v = c.Next() {
-			var u users.User
-			if err := st.db.Codec().Unmarshal(v, &u); err != nil {
-				return err
-			}
-			if u.Perm.Admin {
-				count++
-			}
-		}
-
-		return nil
+		var err error
+		count, err = st.countAdmins(tx)
+		return err
 	})
-
 	return count, err
+}
+
+func (st usersBackend) countAdmins(tx *bolt.Tx) (int, error) {
+	count := 0
+	bucket := tx.Bucket([]byte(reflect.TypeOf(users.User{}).Name()))
+	if bucket == nil {
+		return 0, nil
+	}
+	c := bucket.Cursor()
+	for _, v := c.First(); v != nil; _, v = c.Next() {
+		var u users.User
+		if err := st.db.Codec().Unmarshal(v, &u); err != nil {
+			return 0, err
+		}
+		if u.Perm.Admin {
+			count++
+		}
+	}
+	return count, nil
 }
