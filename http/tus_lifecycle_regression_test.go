@@ -32,7 +32,7 @@ func TestTusLifecycleMutationsCannotRebindReplacement(t *testing.T) {
 	}{
 		{
 			name: "delete",
-			mutate: func(t *testing.T, f *tusTestFixture, uploadURL string) {
+			mutate: func(t *testing.T, f *tusTestFixture, _ string) {
 				rec := f.resourceMutation(t, resourceDeleteHandler(diskcache.NewNoOp(), f.cache), http.MethodDelete, "/active.bin", nil)
 				if rec.Code != http.StatusNoContent {
 					t.Fatalf("DELETE = %d, body=%q", rec.Code, rec.Body.String())
@@ -44,7 +44,7 @@ func TestTusLifecycleMutationsCannotRebindReplacement(t *testing.T) {
 		},
 		{
 			name: "overwrite",
-			mutate: func(t *testing.T, f *tusTestFixture, uploadURL string) {
+			mutate: func(t *testing.T, f *tusTestFixture, _ string) {
 				rec := f.resourceMutation(t, resourcePostHandler(diskcache.NewNoOp(), f.cache), http.MethodPost, "/active.bin?override=true", bytes.NewBufferString("replacement"))
 				if rec.Code != http.StatusOK {
 					t.Fatalf("POST override = %d, body=%q", rec.Code, rec.Body.String())
@@ -53,7 +53,7 @@ func TestTusLifecycleMutationsCannotRebindReplacement(t *testing.T) {
 		},
 		{
 			name: "rename",
-			mutate: func(t *testing.T, f *tusTestFixture, uploadURL string) {
+			mutate: func(t *testing.T, f *tusTestFixture, _ string) {
 				rec := f.resourceMutation(t, resourcePatchHandler(diskcache.NewNoOp()), http.MethodPatch, "/active.bin?action=rename&destination=/moved.bin", nil)
 				if rec.Code != http.StatusOK {
 					t.Fatalf("PATCH rename = %d, body=%q", rec.Code, rec.Body.String())
