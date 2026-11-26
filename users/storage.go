@@ -94,15 +94,8 @@ func (s *Storage) Update(user *User, fields ...string) error {
 		return err
 	}
 
-	// Persisted token version revokes all older JWTs after any successful user
-	// mutation. Keep it out of API JSON but always persist it with the update.
-	user.SessionVersion++
-	if len(fields) == 0 {
-		err = s.back.Save(user)
-	} else {
-		fields = append(fields, "SessionVersion")
-		err = s.back.Update(user, fields...)
-	}
+	// The backend merges the update and advances the session epoch atomically.
+	err = s.back.Update(user, fields...)
 	if err != nil {
 		return err
 	}

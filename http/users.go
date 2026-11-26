@@ -221,17 +221,17 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 			return http.StatusForbidden, nil
 		}
 
+		suser, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
+		if err != nil {
+			return errToStatus(err), err
+		}
+		req.Data.SessionVersion = suser.SessionVersion
 		if req.Data.Password != "" {
 			req.Data.Password, err = users.ValidateAndHashPwd(req.Data.Password, d.settings.MinimumPasswordLength)
 			if err != nil {
 				return http.StatusBadRequest, err
 			}
 		} else {
-			var suser *users.User
-			suser, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
-			if err != nil {
-				return http.StatusInternalServerError, err
-			}
 			req.Data.Password = suser.Password
 		}
 

@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/asdine/storm/v3"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/require"
 
 	fbAuth "github.com/filebrowser/filebrowser/v2/auth"
 	"github.com/filebrowser/filebrowser/v2/sessions"
@@ -197,4 +199,62 @@ func TestProxySessionExpiryAndReauthentication(t *testing.T) {
 			t.Fatal("deleted user received renewal hint")
 		}
 	}
+}
+
+func TestKeyEnrollmentRevokesSession(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	db, err := storm.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	st, err := bolt.NewStorage(db)
+	require.NoError(t, err)
+	server := &settings.Server{Root: t.TempDir()}
+	set := &settings.Settings{AuthMethod: fbAuth.MethodJSONAuth, Key: []byte("test-signing-key")}
+	require.NoError(t, st.Settings.Save(set))
+	require.NoError(t, st.Auth.Save(&fbAuth.JSONAuth{}))
+	hash, err := users.HashPwd("first-password")
+	require.NoError(t, err)
+	u := &users.User{Username: "alice", Password: hash}
+	require.NoError(t, st.Users.Save(u))
+
+	call := func(handler handleFunc, method, token, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/", strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("X-Auth", token)
+		}
+		handle(handler, "", st, server).ServeHTTP(rec, req)
+		return rec
+	}
+	login := func() *httptest.ResponseRecorder {
+		return call(loginHandler(time.Hour), http.MethodPost, "", `{"username":"alice","password":"first-password"}`)
+	}
+	before := login()
+	require.Equal(t, http.StatusOK, before.Code)
+	token := before.Body.String()
+	protected := withUser(func(http.ResponseWriter, *http.Request, *data) (int, error) {
+		return http.StatusOK, nil
+	})
+	require.Equal(t, http.StatusOK, call(protected, http.MethodGet, token, "").Code)
+
+	require.NoError(t, st.SecurityKeys.Change(u.ID, 0, func(_ *users.User, sec *users.SecurityState) error {
+		sec.Handle = []byte("01234567890123456789012345678901")
+		sec.Keys = []users.SecurityKey{{
+			Label: "test key", CreatedAt: time.Now(),
+			Credential: webauthn.Credential{ID: []byte("test-credential"), PublicKey: []byte("test-public-key")},
+		}}
+		return nil
+	}))
+	blockOldLoginAndToken := func() {
+		require.Equal(t, http.StatusForbidden, login().Code)
+		require.Equal(t, http.StatusUnauthorized, call(protected, http.MethodGet, token, "").Code)
+		require.Equal(t, http.StatusUnauthorized, call(renewHandler(time.Hour), http.MethodPost, token, "").Code)
+	}
+	blockOldLoginAndToken()
+	require.NoError(t, db.Close())
+	db, err = storm.Open(path)
+	require.NoError(t, err)
+	st, err = bolt.NewStorage(db)
+	require.NoError(t, err)
+	blockOldLoginAndToken()
 }

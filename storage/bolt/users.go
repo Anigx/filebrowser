@@ -19,6 +19,17 @@ type usersBackend struct {
 }
 
 func (st usersBackend) GetBy(i interface{}) (user *users.User, err error) {
+	err = st.db.Bolt.View(func(tx *bolt.Tx) error {
+		user, err = st.getBy(tx, i)
+		if err != nil {
+			return err
+		}
+		return hydrateUserSecurity(tx, user)
+	})
+	return user, err
+}
+
+func (st usersBackend) getBy(tx *bolt.Tx, i interface{}) (user *users.User, err error) {
 	user = &users.User{}
 
 	var arg string
@@ -31,7 +42,7 @@ func (st usersBackend) GetBy(i interface{}) (user *users.User, err error) {
 		return nil, fberrors.ErrInvalidDataType
 	}
 
-	err = st.db.One(arg, i, user)
+	err = st.db.WithTransaction(tx).One(arg, i, user)
 
 	if err != nil {
 		if errors.Is(err, storm.ErrNotFound) {
@@ -43,13 +54,28 @@ func (st usersBackend) GetBy(i interface{}) (user *users.User, err error) {
 	return
 }
 
+func hydrateUserSecurity(tx *bolt.Tx, user *users.User) error {
+	state, err := readUserSecurity(tx, user.ID)
+	if err != nil {
+		return err
+	}
+	user.SessionVersion = state.Epoch
+	user.KeyOnly = len(state.Keys) != 0
+	return nil
+}
+
 func (st usersBackend) GetByScope(scope string) (*users.User, error) {
 	user := &users.User{}
 	// Match case-insensitively: on a case-insensitive filesystem two scopes
 	// that differ only in case (e.g. /users/Alice and /users/alice) resolve to
 	// the same home directory, so they must be treated as a collision.
 	pattern := "(?i)^" + regexp.QuoteMeta(scope) + "$"
-	err := st.db.Select(q.Re("Scope", pattern)).First(user)
+	err := st.db.Bolt.View(func(tx *bolt.Tx) error {
+		if err := st.db.WithTransaction(tx).Select(q.Re("Scope", pattern)).First(user); err != nil {
+			return err
+		}
+		return hydrateUserSecurity(tx, user)
+	})
 	if err != nil {
 		if errors.Is(err, storm.ErrNotFound) {
 			return nil, fberrors.ErrNotExist
@@ -62,7 +88,17 @@ func (st usersBackend) GetByScope(scope string) (*users.User, error) {
 
 func (st usersBackend) Gets() ([]*users.User, error) {
 	var allUsers []*users.User
-	err := st.db.All(&allUsers)
+	err := st.db.Bolt.View(func(tx *bolt.Tx) error {
+		if err := st.db.WithTransaction(tx).All(&allUsers); err != nil {
+			return err
+		}
+		for _, user := range allUsers {
+			if err := hydrateUserSecurity(tx, user); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if errors.Is(err, storm.ErrNotFound) {
 		return nil, fberrors.ErrNotExist
 	}
@@ -75,26 +111,81 @@ func (st usersBackend) Gets() ([]*users.User, error) {
 }
 
 func (st usersBackend) Update(user *users.User, fields ...string) error {
-	if len(fields) == 0 {
-		return st.Save(user)
-	}
-
-	for _, field := range fields {
-		userField := reflect.ValueOf(user).Elem().FieldByName(field)
-		if !userField.IsValid() {
-			return fmt.Errorf("invalid field: %s", field)
-		}
-		val := userField.Interface()
-		if err := st.db.UpdateField(user, field, val); err != nil {
+	var next *users.User
+	var epoch uint64
+	var keyOnly bool
+	err := st.db.Bolt.Update(func(tx *bolt.Tx) error {
+		current, err := st.getBy(tx, user.ID)
+		if err != nil {
 			return err
 		}
+		state, err := readUserSecurity(tx, user.ID)
+		if err != nil {
+			return err
+		}
+		oldPassword := current.Password
+		next = current
+		keyOnly = len(state.Keys) != 0
+		if len(fields) == 0 {
+			if user.SessionVersion != state.Epoch {
+				return users.ErrStaleSecurityState
+			}
+			next = user
+		} else if err := mergeUserFields(next, user, fields); err != nil {
+			return err
+		}
+		if keyOnly && next.Password != oldPassword {
+			return users.ErrKeyOnlyAccount
+		}
+		if err := st.saveUser(tx, next); err != nil {
+			return err
+		}
+		if securityRelevantUserFields(fields) {
+			state.Epoch++
+		}
+		epoch = state.Epoch
+		return writeUserSecurity(tx, user.ID, state)
+	})
+	if err == nil {
+		user.SessionVersion, user.KeyOnly = epoch, keyOnly
 	}
+	return err
+}
 
+func securityRelevantUserFields(fields []string) bool {
+	for _, field := range fields {
+		switch field {
+		case "Locale", "HideDotfiles", "SingleClick", "RedirectAfterCopyMove", "DateFormat", "AceEditorTheme", "ViewMode", "Sorting":
+		default:
+			return true
+		}
+	}
+	return len(fields) == 0
+}
+
+func mergeUserFields(dst, src *users.User, fields []string) error {
+	target, source := reflect.ValueOf(dst).Elem(), reflect.ValueOf(src).Elem()
+	for _, field := range fields {
+		sf, ok := target.Type().FieldByName(field)
+		if !ok || sf.PkgPath != "" || sf.Tag.Get("json") == "-" || field == "ID" {
+			return fmt.Errorf("invalid field: %s", field)
+		}
+		target.FieldByIndex(sf.Index).Set(source.FieldByIndex(sf.Index))
+	}
 	return nil
 }
 
 func (st usersBackend) Save(user *users.User) error {
-	err := st.db.Save(user)
+	if user.ID != 0 {
+		return st.Update(user)
+	}
+	return st.db.Bolt.Update(func(tx *bolt.Tx) error {
+		return st.saveUser(tx, user)
+	})
+}
+
+func (st usersBackend) saveUser(tx *bolt.Tx, user *users.User) error {
+	err := st.db.WithTransaction(tx).Save(user)
 	if errors.Is(err, storm.ErrAlreadyExists) {
 		return fberrors.ErrExist
 	}
@@ -102,16 +193,27 @@ func (st usersBackend) Save(user *users.User) error {
 }
 
 func (st usersBackend) DeleteByID(id uint) error {
-	return st.db.DeleteStruct(&users.User{ID: id})
+	return st.deleteBy(id)
 }
 
 func (st usersBackend) DeleteByUsername(username string) error {
-	user, err := st.GetBy(username)
-	if err != nil {
-		return err
-	}
+	return st.deleteBy(username)
+}
 
-	return st.db.DeleteStruct(user)
+func (st usersBackend) deleteBy(id any) error {
+	return st.db.Bolt.Update(func(tx *bolt.Tx) error {
+		user, err := st.getBy(tx, id)
+		if err != nil {
+			return err
+		}
+		if err := st.db.WithTransaction(tx).DeleteStruct(user); err != nil {
+			return err
+		}
+		if bucket := tx.Bucket(userSecurityBucket); bucket != nil {
+			return bucket.Delete(userSecurityID(user.ID))
+		}
+		return nil
+	})
 }
 
 func (st usersBackend) CountAdmins() (int, error) {

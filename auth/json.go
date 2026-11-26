@@ -58,7 +58,7 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, s
 	u, err := usr.Get(srv.Root, srv.FollowExternalSymlinks, cred.Username)
 
 	hash := dummyHash
-	if err == nil {
+	if err == nil && !u.KeyOnly {
 		hash = u.Password
 	}
 
@@ -66,7 +66,7 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, s
 		return nil, os.ErrPermission
 	}
 
-	if err != nil {
+	if err != nil || u.KeyOnly {
 		return nil, os.ErrPermission
 	}
 

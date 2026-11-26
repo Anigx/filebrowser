@@ -222,6 +222,7 @@ func (a *HookAuth) GetUser(d *users.User) *users.User {
 	}
 	user := users.User{
 		ID:                    d.ID,
+		SessionVersion:        d.SessionVersion,
 		Username:              d.Username,
 		Password:              d.Password,
 		Scope:                 a.Fields.GetString("user.scope", d.Scope),

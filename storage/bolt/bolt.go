@@ -25,10 +25,11 @@ func NewStorage(db *storm.DB) (*storage.Storage, error) {
 	}
 
 	return &storage.Storage{
-		Auth:     authStore,
-		Users:    userStore,
-		Share:    shareStore,
-		Settings: settingsStore,
-		Sessions: sessionStore,
+		Auth:         authStore,
+		Users:        userStore,
+		Share:        shareStore,
+		Settings:     settingsStore,
+		Sessions:     sessionStore,
+		SecurityKeys: userSecurityBackend{usersBackend{db: db}},
 	}, nil
 }

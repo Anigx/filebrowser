@@ -39,7 +39,8 @@ type User struct {
 	// SessionVersion is persisted and included in every token. Incrementing it
 	// revokes all previously issued sessions for this user, including after a
 	// process restart.
-	SessionVersion uint64 `json:"-"`
+	SessionVersion uint64 `json:"-" yaml:"-"`
+	KeyOnly        bool   `json:"-" yaml:"-"`
 }
 
 // GetRules implements rules.Provider.
