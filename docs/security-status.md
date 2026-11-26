@@ -85,3 +85,8 @@ docker compose --env-file .env.example config --quiet
 For a deployable image, also run the browser and restore acceptance tests in
 [`tests/e2e/README.md`](../tests/e2e/README.md) against a disposable local
 instance. Do not treat a green unit suite as a production deployment approval.
+
+The fork's tag workflow requires frontend and Go checks, virtual FIDO2 browser
+acceptance, and a disposable Compose/restore run for the same commit. It
+records the tested image ID in the CI summary and publishes binary archives
+and SHA-256 checksums only to `Anigx/filebrowser`.

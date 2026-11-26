@@ -27,6 +27,7 @@ Users management utility.
 * [filebrowser users find](filebrowser-users-find.md)	 - Find a user by username or id
 * [filebrowser users import](filebrowser-users-import.md)	 - Import users from a file
 * [filebrowser users ls](filebrowser-users-ls.md)	 - List all users.
+* [filebrowser users recover-password](filebrowser-users-recover-password.md)	 - Remove all security keys and set a new password (server stopped)
 * [filebrowser users rm](filebrowser-users-rm.md)	 - Delete a user by username or id
 * [filebrowser users update](filebrowser-users-update.md)	 - Updates an existing user
 

@@ -1,7 +1,7 @@
 # Build the checked-out sources, never a host-provided binary or frontend dist.
 # For byte-for-byte rebuilds, override these with approved image@sha256 digests.
 ARG NODE_IMAGE=node:24-bookworm
-ARG GO_IMAGE=golang:1.25
+ARG GO_IMAGE=golang:1.26
 
 FROM ${NODE_IMAGE} AS frontend-deps
 WORKDIR /src/frontend

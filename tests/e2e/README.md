@@ -32,3 +32,17 @@ Browser tests create randomly named `qa-browser-*` files and delete them. Screen
 output defaults to `/tmp/filebrowser-qa`, overridable via `QA_OUTPUT_DIR`. The restore
 test tears down its own container and temporary backup. It does not touch the running
 Compose deployment. No real Cloudflare proxy or production server is contacted.
+
+### Virtual FIDO2 security key
+
+Build the frontend and binary first. The test starts a disposable local
+instance with generated credentials and an isolated database:
+
+```sh
+python -m playwright install chromium
+QA_FILEBROWSER_BIN=./filebrowser python tests/e2e/security_key.py
+QA_BASE_PATH='' QA_FILEBROWSER_BIN=./filebrowser python tests/e2e/security_key.py
+```
+
+Set `QA_CHROMIUM` to use an existing Chromium-based executable. These tests
+use a virtual authenticator, not a physical YubiKey.

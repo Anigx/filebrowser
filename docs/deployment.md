@@ -58,6 +58,11 @@ tunnel. Do not enable command execution, unsafe symlink following, or trust
 arbitrary proxy headers. These protections are application defaults, not inert
 Compose environment variables.
 
+To enable passwordless security-key sign-in, follow the
+[WebAuthn setup](authentication.md#passwordless-security-keys-webauthn).
+Use the origin seen by the browser at the HTTPS proxy, and keep the entire
+database in your backup so the registered public credentials are restored.
+
 ### Custom health endpoints
 
 The bundled healthcheck reads the **default JSON config** and `FB_PORT`,

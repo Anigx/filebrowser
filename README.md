@@ -36,6 +36,9 @@ For deployment:
 
 ## Documentation
 
+The fork supports [passwordless FIDO2 security-key sign-in](docs/authentication.md#passwordless-security-keys-webauthn),
+including compatible YubiKeys. It is opt-in and uses the built-in JSON auth mode.
+
 Documentation on how to install, configure, and build this project lives in [`docs`](docs) in this repository.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) documents how to build and develop the project, which remains useful to anyone forking it.

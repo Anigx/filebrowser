@@ -26,6 +26,42 @@ filebrowser config set --recaptcha.host https://recaptcha.net
 
 Where `https://recaptcha.net` is any provider you want.
 
+### Passwordless security keys (WebAuthn)
+
+With JSON authentication, users can replace their password with a FIDO2 key,
+such as a compatible YubiKey. Configure the public browser origin, not the
+internal proxy address or a URL containing the application base path:
+
+```sh
+filebrowser config set --webauthn.origin=https://files.example.com
+```
+
+Stop File Browser before changing its database configuration, then restart it
+behind the trusted HTTPS proxy. For local tests, `http://localhost:8000` is
+supported. Switch enrolled accounts back to passwords before changing the
+hostname or leaving JSON authentication.
+
+In **Settings → Profile → Security keys**, confirm your current password and
+register a key. The old password stops working, and existing sessions are
+invalidated. Sign in with your username and **Sign in with a security key**.
+The browser requests user verification (such as a YubiKey PIN). You can
+register a spare key from the same page.
+
+To switch back to a password, confirm a registered key and set a new password.
+An administrator can remove another user's keys from the user editor after
+confirming the administrator's own login method. Removing the last key
+requires a new password; the old one cannot be reused. Convey the password
+privately. If no administrator can sign in, stop File Browser and run:
+
+```sh
+filebrowser --database /path/to/filebrowser.db users recover-password USERNAME
+```
+
+The command prompts without echoing the password and invalidates the account's
+keys and sessions. Use a [database backup](deployment.md#consistent-backup)
+to preserve enrollments: a user export cannot restore them. Do not open the
+database with an older binary after enabling this feature.
+
 ## Proxy Header
 
 If you have a reverse proxy you want to use to login your users, you do it via our `proxy` authentication method. To configure this method, your proxy must send an HTTP header containing the username of the logged in user:

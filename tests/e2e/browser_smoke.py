@@ -25,7 +25,8 @@ def main():
                 re.search(r"randomly generated password: (\S+)", logs).group(1))
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            executable_path="/usr/bin/chromium", args=["--no-sandbox"]
+            executable_path=os.environ.get("QA_CHROMIUM", "/usr/bin/chromium") or None,
+            args=["--no-sandbox"],
         )
         context = browser.new_context()
         page = context.new_page()
@@ -33,7 +34,7 @@ def main():
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(BASE)
         page.get_by_role("textbox", name="Username").fill("admin")
-        page.get_by_role("textbox", name="Password").fill(password)
+        page.get_by_label("Password", exact=True).fill(password)
         page.get_by_role("button", name="Login", exact=True).click()
         page.wait_for_url("**/files/**")
         page.locator("#upload-input").wait_for(state="attached")

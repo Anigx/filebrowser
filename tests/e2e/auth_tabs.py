@@ -17,12 +17,15 @@ async def main():
                 if os.environ.get("QA_PASSWORD_FILE") else
                 re.search(r"randomly generated password: (\S+)", logs).group(1))
     async with async_playwright() as p:
-        browser = await p.chromium.launch(executable_path="/usr/bin/chromium", args=["--no-sandbox"])
+        browser = await p.chromium.launch(
+            executable_path=os.environ.get("QA_CHROMIUM", "/usr/bin/chromium") or None,
+            args=["--no-sandbox"],
+        )
         context = await browser.new_context()
         first = await context.new_page()
         await first.goto(BASE)
         await first.get_by_role("textbox", name="Username").fill("admin")
-        await first.get_by_role("textbox", name="Password").fill(password)
+        await first.get_by_label("Password", exact=True).fill(password)
         await first.get_by_role("button", name="Login", exact=True).click()
         await first.wait_for_url("**/files/**")
         await first.locator("#upload-input").wait_for(state="attached")

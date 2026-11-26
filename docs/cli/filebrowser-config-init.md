@@ -75,6 +75,7 @@ filebrowser config init [flags]
       --tus.chunkSize uint               the tus chunk size (default 10485760)
       --tus.retryCount uint16            the tus retry count (default 5)
       --viewMode string                  view mode for users (default "list")
+      --webauthn.origin string           public HTTPS origin for passwordless security keys (JSON auth only)
 ```
 
 ## Options inherited from parent commands
