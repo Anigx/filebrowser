@@ -105,9 +105,12 @@ jobs:
         run: |
           set -euo pipefail
           staging="$IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$ARCH"
-          docker push "$staging"
-          digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$staging" | jq -er '.digest')
+          docker push "$staging" | tee "$RUNNER_TEMP/image-push.log"
+          digest=$(sed -nE 's/.*digest: (sha256:[0-9a-f]{64}) size: [0-9]+.*/\1/p' "$RUNNER_TEMP/image-push.log")
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_id=$(docker image inspect --format '{{.Id}}' "$staging")
+          docker buildx imagetools inspect --raw "$IMAGE@$digest" | \
+            jq -e --arg config "$image_id" '.config.digest == $config' >/dev/null
           printf '%s\n' "$digest" > "$ARCH.digest"
       - uses: actions/upload-artifact@v6
         with:
@@ -124,6 +127,7 @@ jobs:
     env:
       RELEASE_VERSION: ${{ needs.verify.outputs.version }}
       SOURCE_SHA: ${{ needs.verify.outputs.sha }}
+      REGISTRY_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@v7
         with:
@@ -139,28 +143,31 @@ jobs:
         run: |
           set -euo pipefail
           version_ref="$IMAGE:$RELEASE_VERSION"
-          if docker buildx imagetools inspect "$version_ref" >"$RUNNER_TEMP/index-check.log" 2>&1; then
-            echo "Refusing to replace $version_ref" >&2
-            exit 1
-          fi
-          grep -Eiq 'not found|manifest unknown' "$RUNNER_TEMP/index-check.log" || {
-            cat "$RUNNER_TEMP/index-check.log" >&2
-            exit 1
-          }
           amd=$(cat digests/amd64.digest)
           arm=$(cat digests/arm64.digest)
           [[ "$amd" =~ ^sha256:[0-9a-f]{64}$ && "$arm" =~ ^sha256:[0-9a-f]{64}$ && "$amd" != "$arm" ]]
-          docker buildx imagetools create \
-            --annotation "index:org.opencontainers.image.source=https://github.com/Anigx/filebrowser" \
-            --annotation "index:org.opencontainers.image.revision=$SOURCE_SHA" \
-            --annotation "index:org.opencontainers.image.version=$RELEASE_VERSION" \
-            --tag "$version_ref" "$IMAGE@$amd" "$IMAGE@$arm"
-          docker buildx imagetools inspect --raw "$version_ref" | jq -e \
-            --arg amd "$amd" --arg arm "$arm" '
+          verify_index() {
+            jq -e --arg amd "$amd" --arg arm "$arm" '
               (.manifests | length) == 2 and
               any(.manifests[]; .digest == $amd and .platform.os == "linux" and .platform.architecture == "amd64") and
               any(.manifests[]; .digest == $arm and .platform.os == "linux" and .platform.architecture == "arm64")
             ' >/dev/null
+          }
+          docker buildx imagetools create --dry-run "$IMAGE@$amd" "$IMAGE@$arm" | verify_index
+
+          registry_token=$(curl -fsS -u "$GITHUB_REPOSITORY_OWNER:$REGISTRY_TOKEN" \
+            'https://ghcr.io/token?service=ghcr.io&scope=repository:anigx/filebrowser:pull' | jq -er '.token')
+          echo "::add-mask::$registry_token"
+          status=$(curl -sS -o "$RUNNER_TEMP/manifest-check.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $registry_token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/anigx/filebrowser/manifests/$RELEASE_VERSION")
+          if [ "$status" != 404 ] || ! jq -e 'any(.errors[]; .code == "MANIFEST_UNKNOWN")' "$RUNNER_TEMP/manifest-check.json" >/dev/null; then
+            echo "Refusing to replace $version_ref or proceed without a confirmed missing manifest (HTTP $status)." >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$version_ref" "$IMAGE@$amd" "$IMAGE@$arm"
+          docker buildx imagetools inspect --raw "$version_ref" | verify_index
           digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$version_ref" | jq -er '.digest')
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           {

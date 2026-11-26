@@ -2,7 +2,8 @@
 
 ## Use a versioned package from GitHub
 
-For `v2.64.0`, pull the image from GitHub Container Registry:
+When the container package for `v2.64.0` is public, pull it from
+GitHub Container Registry:
 
 ```sh
 docker pull ghcr.io/anigx/filebrowser:2.64.0

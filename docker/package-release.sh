@@ -26,11 +26,11 @@ case "${1:-}" in
         draft=$(gh release view "$2" --repo "$repo" --json isDraft,isPrerelease --jq '.isDraft or .isPrerelease')
         [ "$draft" = false ] || fail 'Expected a public stable release.'
         ids=$(gh run list --repo "$repo" --workflow ci.yaml --branch "$2" --commit "$3" \
-            --status success --limit 20 --json databaseId --jq '.[].databaseId')
+            --event push --status success --limit 20 --json databaseId --jq '.[].databaseId')
         for id in $ids; do
-            run=$(gh run view "$id" --repo "$repo" --json headSha,headBranch,conclusion,jobs)
+            run=$(gh run view "$id" --repo "$repo" --json headSha,headBranch,event,conclusion,jobs)
             if printf '%s\n' "$run" | jq -e --arg sha "$3" --arg tag "$2" '
-                .headSha == $sha and .headBranch == $tag and .conclusion == "success" and
+                .headSha == $sha and .headBranch == $tag and .event == "push" and .conclusion == "success" and
                 any(.jobs[]; .name == "Deployment and browser acceptance" and .conclusion == "success")
             ' >/dev/null; then
                 printf '%s\n' "$id"

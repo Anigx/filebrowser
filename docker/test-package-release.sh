@@ -29,7 +29,9 @@ case "$1 $2" in
     if [ "$FIXTURE" = acceptance-failed ]; then ci=failure; fi
     ref=v2.64.0
     if [ "$FIXTURE" = ref-mismatch ]; then ref=master; fi
-    printf '{"headSha":"%s","headBranch":"%s","conclusion":"success","jobs":[{"name":"Deployment and browser acceptance","conclusion":"%s"}]}\n' "$sha" "$ref" "$ci";;
+    event=push
+    if [ "$FIXTURE" = manual ]; then event=workflow_dispatch; fi
+    printf '{"headSha":"%s","headBranch":"%s","event":"%s","conclusion":"success","jobs":[{"name":"Deployment and browser acceptance","conclusion":"%s"}]}\n' "$sha" "$ref" "$event" "$ci";;
   *) exit 1;;
 esac
 SH
@@ -39,7 +41,7 @@ sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 export FIXTURE=good
 test "$(sh package-release.sh verify-ci v2.64.0 "$sha")" = 123
-for FIXTURE in missing draft mismatch ref-mismatch acceptance-failed; do
+for FIXTURE in missing draft mismatch ref-mismatch manual acceptance-failed; do
   assert_rejected sh package-release.sh verify-ci v2.64.0 "$sha"
 done
 printf '%s\n' 'Package release verification tests passed.'
