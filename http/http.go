@@ -18,6 +18,7 @@ type modifyRequest struct {
 	What            string   `json:"what"`             // Answer to: what data type?
 	Which           []string `json:"which"`            // Answer to: which fields?
 	CurrentPassword string   `json:"current_password"` // Answer to: user logged password
+	Proof           string   `json:"proof"`
 }
 
 func NewHandler(
@@ -28,6 +29,7 @@ func NewHandler(
 	server *settings.Server,
 	assetsFs fs.FS,
 ) (http.Handler, error) {
+	var keyAuth *securityKeyAuth
 	if store.SecurityKeys != nil {
 		set, err := store.Settings.Get()
 		if err != nil {
@@ -41,6 +43,12 @@ func NewHandler(
 			if enrolled {
 				return nil, errors.New("enrolled security keys require JSON authentication")
 			}
+		} else if set.WebAuthnOrigin != "" {
+			instance, err := auth.NewWebAuthn(set.WebAuthnOrigin)
+			if err != nil {
+				return nil, err
+			}
+			keyAuth = &securityKeyAuth{wa: instance, origin: instance.Config.RPOrigins[0], cache: newKeyChallengeCache()}
 		}
 	}
 	server.Clean()
@@ -56,7 +64,10 @@ func NewHandler(
 	index, static := getStaticHandlers(store, server, assetsFs)
 
 	monkey := func(fn handleFunc, prefix string) http.Handler {
-		return handle(fn, prefix, store, server)
+		return handle(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+			d.keyAuth = keyAuth
+			return fn(w, r, d)
+		}, prefix, store, server)
 	}
 
 	r.HandleFunc("/health", healthHandler)
@@ -70,6 +81,17 @@ func NewHandler(
 	api.Handle("/signup", monkey(signupHandler, ""))
 	api.Handle("/renew", monkey(renewHandler(tokenExpirationTime), ""))
 	api.Handle("/logout", monkey(logoutHandler, "")).Methods("POST")
+	if keyAuth != nil {
+		keys := api.PathPrefix("/webauthn").Subrouter()
+		keys.Handle("/login/start", monkey(keyAuth.guard(keyAuth.loginStart, true), "")).Methods("POST")
+		keys.Handle("/login/finish", monkey(keyAuth.guard(keyAuth.loginFinish(tokenExpirationTime), true), "")).Methods("POST")
+		keys.Handle("/verify/start", monkey(keyAuth.guard(withUser(keyAuth.verifyStart), false), "")).Methods("POST")
+		keys.Handle("/verify/finish", monkey(keyAuth.guard(withUser(keyAuth.verifyFinish), false), "")).Methods("POST")
+		keys.Handle("/register/start", monkey(keyAuth.guard(withUser(keyAuth.registerStart), false), "")).Methods("POST")
+		keys.Handle("/register/finish", monkey(keyAuth.guard(withUser(keyAuth.registerFinish), false), "")).Methods("POST")
+		keys.Handle("/users/{id:[0-9]+}", monkey(keyAuth.guard(withSelfOrAdmin(keyAuth.list), false), "")).Methods("GET")
+		keys.Handle("/users/{id:[0-9]+}/remove", monkey(keyAuth.guard(withSelfOrAdmin(keyAuth.remove), false), "")).Methods("POST")
+	}
 
 	users := api.PathPrefix("/users").Subrouter()
 	users.Handle("", monkey(usersGetHandler, "")).Methods("GET")

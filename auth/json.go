@@ -43,16 +43,12 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, s
 	}
 
 	// If ReCaptcha is enabled, check the code.
-	if a.ReCaptcha != nil && a.ReCaptcha.Secret != "" {
-		ok, err := a.ReCaptcha.Ok(cred.ReCaptcha)
-
-		if err != nil {
-			return nil, err
-		}
-
-		if !ok {
-			return nil, os.ErrPermission
-		}
+	ok, err := a.CheckReCaptcha(cred.ReCaptcha)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, os.ErrPermission
 	}
 
 	u, err := usr.Get(srv.Root, srv.FollowExternalSymlinks, cred.Username)
@@ -71,6 +67,16 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, s
 	}
 
 	return u, nil
+}
+
+func (a JSONAuth) CheckReCaptcha(response string) (bool, error) {
+	if a.ReCaptcha == nil || a.ReCaptcha.Secret == "" {
+		return true, nil
+	}
+	if response == "" {
+		return false, nil
+	}
+	return a.ReCaptcha.Ok(response)
 }
 
 // LoginPage tells that json auth doesn't require a login page.

@@ -27,6 +27,19 @@ type modifyUserRequest struct {
 	Data *users.User `json:"data"`
 }
 
+func authorizeUserChange(d *data, action string, target uint, epoch uint64, password, proof string) (int, error) {
+	if d.settings.AuthMethod != auth.MethodJSONAuth {
+		return 0, nil
+	}
+	if d.keyAuth.fresh(d, keyAction{Action: action, TargetID: target}, epoch, password, proof) {
+		return 0, nil
+	}
+	if d.user.KeyOnly {
+		return http.StatusForbidden, nil
+	}
+	return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
+}
+
 func getUserID(r *http.Request) (uint, error) {
 	vars := mux.Vars(r)
 	i, err := strconv.ParseUint(vars["id"], 10, 0)
@@ -111,16 +124,24 @@ var userDeleteHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Requ
 
 	var body struct {
 		CurrentPassword string `json:"current_password"`
+		Proof           string `json:"proof"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		return http.StatusBadRequest, err
 	}
 
-	if d.settings.AuthMethod == auth.MethodJSONAuth {
-		if !users.CheckPwd(body.CurrentPassword, d.user.Password) {
-			return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
+	target := d.raw.(uint)
+	var epoch uint64
+	if d.user.KeyOnly {
+		var err error
+		epoch, err = keyTargetEpoch(d, target)
+		if err != nil {
+			return errToStatus(err), err
 		}
+	}
+	if code, err := authorizeUserChange(d, "delete-user", target, epoch, body.CurrentPassword, body.Proof); code != 0 {
+		return code, err
 	}
 
 	err := d.store.Users.Delete(d.raw.(uint))
@@ -137,10 +158,8 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 		return http.StatusBadRequest, err
 	}
 
-	if d.settings.AuthMethod == auth.MethodJSONAuth {
-		if !users.CheckPwd(req.CurrentPassword, d.user.Password) {
-			return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
-		}
+	if code, err := authorizeUserChange(d, "create-user", 0, 0, req.CurrentPassword, req.Proof); code != 0 {
+		return code, err
 	}
 
 	if len(req.Which) != 0 {
@@ -183,24 +202,24 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		return http.StatusBadRequest, err
 	}
 
-	if d.settings.AuthMethod == auth.MethodJSONAuth {
-		var sensibleFields = map[string]struct{}{
-			"all":          {},
-			"username":     {},
-			"password":     {},
-			"scope":        {},
-			"lockPassword": {},
-			"commands":     {},
-			"perm":         {},
+	target := d.raw.(uint)
+	var targetUser *users.User
+	needsProof := len(req.Which) == 0
+	for _, field := range req.Which {
+		switch strings.ToLower(field) {
+		case "locale", "hidedotfiles", "singleclick", "redirectaftercopymove", "dateformat", "aceeditortheme", "viewmode", "sorting":
+		default:
+			needsProof = true
 		}
-
-		for _, field := range req.Which {
-			if _, ok := sensibleFields[strings.ToLower(field)]; ok {
-				if !users.CheckPwd(req.CurrentPassword, d.user.Password) {
-					return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
-				}
-				break
-			}
+	}
+	if needsProof {
+		targetUser, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, target)
+		if err != nil {
+			return errToStatus(err), err
+		}
+		req.Data.SessionVersion = targetUser.SessionVersion
+		if code, err := authorizeUserChange(d, "update-user", target, targetUser.SessionVersion, req.CurrentPassword, req.Proof); code != 0 {
+			return code, err
 		}
 	}
 
@@ -216,23 +235,21 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	if len(req.Which) == 0 || (len(req.Which) == 1 && req.Which[0] == "all") {
+	if len(req.Which) == 0 || (len(req.Which) == 1 && strings.EqualFold(req.Which[0], "all")) {
 		if !d.user.Perm.Admin {
 			return http.StatusForbidden, nil
 		}
 
-		suser, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
-		if err != nil {
-			return errToStatus(err), err
-		}
-		req.Data.SessionVersion = suser.SessionVersion
 		if req.Data.Password != "" {
+			if targetUser.KeyOnly {
+				return http.StatusConflict, users.ErrKeyOnlyAccount
+			}
 			req.Data.Password, err = users.ValidateAndHashPwd(req.Data.Password, d.settings.MinimumPasswordLength)
 			if err != nil {
 				return http.StatusBadRequest, err
 			}
 		} else {
-			req.Data.Password = suser.Password
+			req.Data.Password = targetUser.Password
 		}
 
 		req.Which = []string{}
@@ -243,6 +260,9 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		req.Which[k] = v
 
 		if v == "Password" {
+			if targetUser.KeyOnly {
+				return http.StatusConflict, users.ErrKeyOnlyAccount
+			}
 			if !d.user.Perm.Admin && d.user.LockPassword {
 				return http.StatusForbidden, nil
 			}
@@ -262,6 +282,9 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 
 	err = d.store.Users.Update(req.Data, req.Which...)
 	if err != nil {
+		if errors.Is(err, users.ErrStaleSecurityState) || errors.Is(err, users.ErrKeyOnlyAccount) {
+			return http.StatusConflict, err
+		}
 		return http.StatusInternalServerError, err
 	}
 

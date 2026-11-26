@@ -39,6 +39,7 @@ type userInfo struct {
 	Username              string            `json:"username"`
 	AceEditorTheme        string            `json:"aceEditorTheme"`
 	SessionVersion        uint64            `json:"sessionVersion"`
+	KeyOnly               bool              `json:"keyOnly,omitempty"`
 }
 
 type authToken struct {
@@ -105,7 +106,7 @@ func withUser(fn handleFunc) handleFunc {
 		if tk.User.SessionVersion != d.user.SessionVersion {
 			return http.StatusUnauthorized, nil
 		}
-		if time.Until(tk.ExpiresAt.Time) < time.Hour {
+		if !d.authNoRenew && time.Until(tk.ExpiresAt.Time) < time.Hour {
 			w.Header().Add("X-Renew-Token", "true")
 		}
 		d.sessionID = tk.ID
@@ -250,6 +251,7 @@ func printToken(w http.ResponseWriter, d *data, user *users.User, tokenExpiratio
 			Username:              user.Username,
 			AceEditorTheme:        user.AceEditorTheme,
 			SessionVersion:        user.SessionVersion,
+			KeyOnly:               user.KeyOnly,
 		},
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

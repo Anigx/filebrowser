@@ -23,12 +23,14 @@ type handleFunc func(w http.ResponseWriter, r *http.Request, d *data) (int, erro
 
 type data struct {
 	*runner.Runner
-	settings  *settings.Settings
-	server    *settings.Server
-	store     *storage.Storage
-	user      *users.User
-	sessionID string
-	raw       interface{}
+	settings    *settings.Settings
+	server      *settings.Server
+	store       *storage.Storage
+	user        *users.User
+	sessionID   string
+	keyAuth     *securityKeyAuth
+	authNoRenew bool
+	raw         interface{}
 
 	// checkerPrefix is prepended to every path before evaluating rules. It is
 	// set when the user's filesystem has been rebased onto a subdirectory (as
