@@ -14,6 +14,9 @@
             v-model:createUserDir="createUserDir"
             :isDefault="false"
             :isNew="isNew"
+            :hide-password="
+              securityKeysEnabled && !isNew && (keyActive || !keyStatusKnown)
+            "
           />
         </div>
 
@@ -45,6 +48,20 @@
         </div>
       </form>
     </div>
+    <div
+      v-if="
+        securityKeysEnabled && user && !isNew && user.id !== authStore.user?.id
+      "
+      class="column"
+    >
+      <SecurityKeys
+        :key="user.id"
+        :user-id="user.id"
+        :is-self="false"
+        :lock-password="user.lockPassword"
+        @active="keyStateChanged"
+      />
+    </div>
   </div>
 </template>
 
@@ -58,14 +75,18 @@ import { computed, inject, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { StatusError } from "@/api/utils";
-import { authMethod } from "@/utils/constants";
+import { authMethod, securityKeysEnabled } from "@/utils/constants";
 import { logout } from "@/utils/auth";
+import SecurityKeys from "@/components/settings/SecurityKeys.vue";
+import * as keys from "@/api/securityKeys";
 
 const error = ref<StatusError>();
 const originalUser = ref<IUser>();
 const user = ref<IUser>();
 const createUserDir = ref<boolean>(false);
 const isCurrentPasswordRequired = ref<boolean>(false);
+const keyActive = ref(false);
+const keyStatusKnown = ref(false);
 
 const $showError = inject<IToastError>("$showError")!;
 const $showSuccess = inject<IToastSuccess>("$showSuccess")!;
@@ -75,6 +96,10 @@ const layoutStore = useLayoutStore();
 const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
+const keyStateChanged = (active: boolean) => {
+  keyActive.value = active;
+  keyStatusKnown.value = true;
+};
 
 onMounted(() => {
   fetchData();
@@ -90,6 +115,7 @@ watch(user, () => {
 
 const fetchData = async () => {
   layoutStore.loading = true;
+  keyStatusKnown.value = false;
 
   try {
     if (isNew.value) {
@@ -111,6 +137,8 @@ const fetchData = async () => {
         ? route.params.id.join("")
         : route.params.id;
       user.value = { ...(await api.get(parseInt(id))) };
+      if (user.value.id === authStore.user?.id)
+        keyStateChanged(authStore.user?.keyOnly === true);
     }
   } catch (err) {
     if (err instanceof Error) {
@@ -122,6 +150,13 @@ const fetchData = async () => {
 };
 
 const deletePrompt = () => {
+  if (authStore.user?.keyOnly) {
+    layoutStore.showHover({
+      prompt: "deleteUser",
+      confirm: () => deleteUser(""),
+    });
+    return;
+  }
   if (isCurrentPasswordRequired.value) {
     layoutStore.showHover({
       prompt: "current-password",
@@ -144,7 +179,10 @@ const deleteUser = async (currentPassword: string) => {
     return false;
   }
   try {
-    await api.remove(user.value.id, currentPassword);
+    const proof = authStore.user?.keyOnly
+      ? await keys.verify("delete-user", user.value.id)
+      : undefined;
+    await api.remove(user.value.id, currentPassword, proof);
     if (user.value.id == authStore.user?.id) {
       logout();
     } else {
@@ -164,6 +202,10 @@ const deleteUser = async (currentPassword: string) => {
 
 const save = (event: Event) => {
   event.preventDefault();
+  if (authStore.user?.keyOnly) {
+    void send("");
+    return;
+  }
   if (isCurrentPasswordRequired.value) {
     layoutStore.showHover({
       prompt: "current-password",
@@ -192,11 +234,17 @@ const send = async (currentPassword: string) => {
         ...user.value,
       };
 
-      const loc = await api.create(newUser, currentPassword);
+      const proof = authStore.user?.keyOnly
+        ? await keys.verify("create-user", 0)
+        : undefined;
+      const loc = await api.create(newUser, currentPassword, proof);
       router.push({ path: loc || "/settings/users" });
       $showSuccess(t("settings.userCreated"));
     } else {
-      await api.update(user.value, ["all"], currentPassword);
+      const proof = authStore.user?.keyOnly
+        ? await keys.verify("update-user", user.value.id)
+        : undefined;
+      await api.update(user.value, ["all"], currentPassword, proof);
 
       if (user.value.id === authStore.user?.id) {
         authStore.updateUser(user.value);

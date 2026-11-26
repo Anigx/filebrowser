@@ -8,6 +8,7 @@ interface IUser {
   commands: string[];
   rules: IRule[];
   lockPassword: boolean;
+  keyOnly?: boolean;
   hideDotfiles: boolean;
   singleClick: boolean;
   redirectAfterCopyMove: boolean;

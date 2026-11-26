@@ -1,4 +1,27 @@
 {
+  "securityKeys": {
+    "title": "Security keys",
+    "signIn": "Sign in with a security key",
+    "signInFailed": "Could not sign in with a security key. Check your username and try again.",
+    "enterUsername": "Enter your username to use a security key.",
+    "unsupported": "Security keys require a supported browser and a secure connection.",
+    "canceled": "Security key confirmation was canceled or timed out. Try again.",
+    "failed": "Could not change security keys. Check your confirmation and try again.",
+    "waiting": "Waiting for confirmation…",
+    "loading": "Loading security keys…",
+    "empty": "No security keys are registered.",
+    "active": "This account signs in with a security key instead of a password.",
+    "backup": "Add a backup key in case you lose your primary key.",
+    "replacesPassword": "Setting up a key disables your current password and signs you out.",
+    "label": "Key name",
+    "add": "Register a security key",
+    "remove": "Remove key",
+    "reset": "Reset security keys",
+    "switchBack": "Switch back to a password",
+    "requireNewPassword": "Set a new password to remove all keys. The previous password will not work.",
+    "confirmRemove": "Verify your sign-in method to remove this key.",
+    "confirmReset": "Set new password and remove keys"
+  },
   "buttons": {
     "cancel": "Cancel",
     "clear": "Clear",

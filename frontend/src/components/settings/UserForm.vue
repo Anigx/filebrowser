@@ -10,7 +10,7 @@
       />
     </p>
 
-    <p v-if="!isDefault">
+    <p v-if="!isDefault && !hidePassword">
       <label for="password">{{ t("settings.password") }}</label>
       <input
         class="input input--block"
@@ -85,6 +85,7 @@ const props = defineProps<{
   isNew: boolean;
   isDefault: boolean;
   createUserDir?: boolean;
+  hidePassword?: boolean;
 }>();
 
 onMounted(() => {

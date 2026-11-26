@@ -10,6 +10,7 @@ const version: string = window.FileBrowser.Version;
 const logoURL = `${staticURL}/img/logo.svg`;
 const noAuth: boolean = window.FileBrowser.NoAuth;
 const authMethod = window.FileBrowser.AuthMethod;
+const securityKeysEnabled = window.FileBrowser.WebAuthn === true;
 const logoutPage: string = window.FileBrowser.LogoutPage;
 const loginPage: boolean = window.FileBrowser.LoginPage;
 const theme: UserTheme = window.FileBrowser.Theme;
@@ -33,6 +34,7 @@ export {
   version,
   noAuth,
   authMethod,
+  securityKeysEnabled,
   logoutPage,
   loginPage,
   theme,

@@ -55,7 +55,7 @@
     <div v-if="!noAuth" class="column">
       <form
         class="card"
-        v-if="!authStore.user?.lockPassword"
+        v-if="!authStore.user?.lockPassword && !authStore.user?.keyOnly"
         @submit="updatePassword"
       >
         <div class="card-title">
@@ -98,6 +98,13 @@
         </div>
       </form>
     </div>
+    <div v-if="securityKeysEnabled && authStore.user" class="column">
+      <SecurityKeys
+        :user-id="authStore.user.id"
+        :is-self="true"
+        :lock-password="authStore.user.lockPassword"
+      />
+    </div>
   </div>
 </template>
 
@@ -107,9 +114,10 @@ import { useLayoutStore } from "@/stores/layout";
 import { users as api } from "@/api";
 import AceEditorTheme from "@/components/settings/AceEditorTheme.vue";
 import Languages from "@/components/settings/Languages.vue";
+import SecurityKeys from "@/components/settings/SecurityKeys.vue";
 import { computed, inject, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { authMethod, noAuth } from "@/utils/constants";
+import { authMethod, noAuth, securityKeysEnabled } from "@/utils/constants";
 
 const layoutStore = useLayoutStore();
 const authStore = useAuthStore();

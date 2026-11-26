@@ -1,4 +1,27 @@
 {
+  "securityKeys": {
+    "title": "Sicherheitsschlüssel",
+    "signIn": "Mit Sicherheitsschlüssel anmelden",
+    "signInFailed": "Anmeldung mit Sicherheitsschlüssel fehlgeschlagen. Prüfe den Benutzernamen und versuche es erneut.",
+    "enterUsername": "Gib deinen Benutzernamen ein, um einen Sicherheitsschlüssel zu verwenden.",
+    "unsupported": "Sicherheitsschlüssel benötigen einen unterstützten Browser und eine sichere Verbindung.",
+    "canceled": "Die Schlüsselbestätigung wurde abgebrochen oder ist abgelaufen. Versuche es erneut.",
+    "failed": "Die Sicherheitsschlüssel konnten nicht geändert werden. Prüfe deine Eingaben und versuche es erneut.",
+    "waiting": "Warte auf Bestätigung …",
+    "loading": "Sicherheitsschlüssel werden geladen …",
+    "empty": "Es sind keine Sicherheitsschlüssel registriert.",
+    "active": "Dieses Konto nutzt einen Sicherheitsschlüssel statt eines Passworts.",
+    "backup": "Registriere einen Ersatzschlüssel für den Fall, dass du deinen Hauptschlüssel verlierst.",
+    "replacesPassword": "Nach der Einrichtung ist das bisherige Passwort ungültig und du wirst abgemeldet.",
+    "label": "Name des Schlüssels",
+    "add": "Sicherheitsschlüssel registrieren",
+    "remove": "Schlüssel entfernen",
+    "reset": "Sicherheitsschlüssel zurücksetzen",
+    "switchBack": "Zur Passwortanmeldung wechseln",
+    "requireNewPassword": "Setze ein neues Passwort, um alle Schlüssel zu entfernen. Das alte Passwort bleibt ungültig.",
+    "confirmRemove": "Bestätige deine Anmeldemethode, um diesen Schlüssel zu entfernen.",
+    "confirmReset": "Neues Passwort setzen und Schlüssel entfernen"
+  },
   "buttons": {
     "cancel": "Abbrechen",
     "clear": "Leeren",
