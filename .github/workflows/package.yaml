@@ -88,13 +88,11 @@ jobs:
           docker compose --env-file .env.example config --quiet
           sh docker/test-healthcheck.sh "$staging"
           sh docker/test-deployment.sh "$staging"
-          container=$(docker run -d --rm --read-only --cap-drop ALL \
-            --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,size=64m \
-            --publish 127.0.0.1::80 "$staging")
-          trap 'docker stop "$container" >/dev/null' EXIT
-          bind=$(docker port "$container" 80/tcp)
-          curl --fail --silent --show-error --max-time 2 --retry 15 \
-            --retry-delay 1 --retry-connrefused "http://$bind/health"
+          export FILEBROWSER_IMAGE="$staging"
+          sudo install -d -o 1000 -g 1000 -m 0750 srv
+          trap 'docker compose -p filebrowser-package down --volumes' EXIT
+          docker compose -p filebrowser-package up --pull never -d --wait --wait-timeout 45
+          curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/health
           printf 'Tested `%s` (`%s`)\n' "$ARCH" "$(docker image inspect --format '{{.Id}}' "$staging")" >> "$GITHUB_STEP_SUMMARY"
       - uses: docker/login-action@v4
         with:
