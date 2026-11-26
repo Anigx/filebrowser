@@ -1,5 +1,19 @@
 # Local Docker deployment
 
+## Use a versioned package from GitHub
+
+For `v2.64.0`, pull the image from GitHub Container Registry:
+
+```sh
+docker pull ghcr.io/anigx/filebrowser:2.64.0
+```
+
+Set `FILEBROWSER_IMAGE=ghcr.io/anigx/filebrowser:2.64.0` in your Compose
+`.env`, or pin its published `sha256` index digest instead of the tag. The
+registry picks the image for Linux AMD64 or ARM64. Back up your existing
+deployment data before upgrading, and follow the same runtime and HTTPS
+requirements below.
+
 ## Build from this checkout
 
 Requirements: Docker Engine with BuildKit and Docker Compose v2 or newer. Run

@@ -1,0 +1,169 @@
+name: Publish Docker package
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable GitHub release tag (e.g. v2.64.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: filebrowser-ghcr-publish
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/anigx/filebrowser
+
+jobs:
+  verify:
+    if: github.repository == 'Anigx/filebrowser' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify released source and acceptance
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sh docker/test-package-release.sh
+          version=$(sh docker/package-release.sh validate-tag "$RELEASE_TAG")
+          sha=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          run=$(sh docker/package-release.sh verify-ci "$RELEASE_TAG" "$sha")
+          printf 'version=%s\nsha=%s\n' "$version" "$sha" >> "$GITHUB_OUTPUT"
+          printf 'Source: `%s`; [CI evidence](https://github.com/Anigx/filebrowser/actions/runs/%s)\n' \
+            "$sha" "$run" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build and smoke-test ${{ matrix.arch }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      ARCH: ${{ matrix.arch }}
+      RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+      SOURCE_SHA: ${{ needs.verify.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
+      - name: Build and test the exact image
+        run: |
+          set -euo pipefail
+          staging="$IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$ARCH"
+          docker build --platform "linux/$ARCH" --pull \
+            --build-arg "VERSION=$RELEASE_VERSION" --build-arg "COMMIT_SHA=$SOURCE_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/Anigx/filebrowser" \
+            --label "org.opencontainers.image.version=$RELEASE_VERSION" \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --tag "$staging" .
+          test "$(docker image inspect --format '{{.Architecture}}' "$staging")" = "$ARCH"
+          docker run --rm --entrypoint /bin/filebrowser "$staging" version | \
+            grep -Fx "File Browser v$RELEASE_VERSION/$SOURCE_SHA"
+          docker compose --env-file .env.example config --quiet
+          sh docker/test-healthcheck.sh "$staging"
+          sh docker/test-deployment.sh "$staging"
+          container=$(docker run -d --rm --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --publish 127.0.0.1::80 "$staging")
+          trap 'docker stop "$container" >/dev/null' EXIT
+          bind=$(docker port "$container" 80/tcp)
+          curl --fail --silent --show-error --max-time 2 --retry 15 \
+            --retry-delay 1 --retry-connrefused "http://$bind/health"
+          printf 'Tested `%s` (`%s`)\n' "$ARCH" "$(docker image inspect --format '{{.Id}}' "$staging")" >> "$GITHUB_STEP_SUMMARY"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+      - name: Upload tested platform image and record its digest
+        run: |
+          set -euo pipefail
+          staging="$IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$ARCH"
+          docker push "$staging"
+          digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$staging" | jq -er '.digest')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s\n' "$digest" > "$ARCH.digest"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: image-${{ matrix.arch }}
+          path: ${{ matrix.arch }}.digest
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    env:
+      RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+      SOURCE_SHA: ${{ needs.verify.outputs.sha }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: image-*
+          merge-multiple: true
+          path: digests
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+      - name: Publish versioned AMD64 and ARM64 index
+        run: |
+          set -euo pipefail
+          version_ref="$IMAGE:$RELEASE_VERSION"
+          if docker buildx imagetools inspect "$version_ref" >"$RUNNER_TEMP/index-check.log" 2>&1; then
+            echo "Refusing to replace $version_ref" >&2
+            exit 1
+          fi
+          grep -Eiq 'not found|manifest unknown' "$RUNNER_TEMP/index-check.log" || {
+            cat "$RUNNER_TEMP/index-check.log" >&2
+            exit 1
+          }
+          amd=$(cat digests/amd64.digest)
+          arm=$(cat digests/arm64.digest)
+          [[ "$amd" =~ ^sha256:[0-9a-f]{64}$ && "$arm" =~ ^sha256:[0-9a-f]{64}$ && "$amd" != "$arm" ]]
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.source=https://github.com/Anigx/filebrowser" \
+            --annotation "index:org.opencontainers.image.revision=$SOURCE_SHA" \
+            --annotation "index:org.opencontainers.image.version=$RELEASE_VERSION" \
+            --tag "$version_ref" "$IMAGE@$amd" "$IMAGE@$arm"
+          docker buildx imagetools inspect --raw "$version_ref" | jq -e \
+            --arg amd "$amd" --arg arm "$arm" '
+              (.manifests | length) == 2 and
+              any(.manifests[]; .digest == $amd and .platform.os == "linux" and .platform.architecture == "amd64") and
+              any(.manifests[]; .digest == $arm and .platform.os == "linux" and .platform.architecture == "arm64")
+            ' >/dev/null
+          digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$version_ref" | jq -er '.digest')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            printf 'Package: `%s`\n\nSource: `%s`\n\nIndex: `%s`\n\n' "$version_ref" "$SOURCE_SHA" "$digest"
+            printf 'Linux AMD64: `%s`\n\nLinux ARM64: `%s`\n' "$amd" "$arm"
+          } >> "$GITHUB_STEP_SUMMARY"
