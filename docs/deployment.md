@@ -2,18 +2,18 @@
 
 ## Use a versioned package from GitHub
 
-Pull the [public container package for `v2.64.0`](https://github.com/users/Anigx/packages/container/package/filebrowser)
+Pull the [public container package for `v2.64.1`](https://github.com/users/Anigx/packages/container/package/filebrowser)
 from GitHub Container Registry:
 
 ```sh
-docker pull ghcr.io/anigx/filebrowser:2.64.0
+docker pull ghcr.io/anigx/filebrowser:2.64.1
 ```
 
-Set `FILEBROWSER_IMAGE=ghcr.io/anigx/filebrowser:2.64.0` in your Compose
+Set `FILEBROWSER_IMAGE=ghcr.io/anigx/filebrowser:2.64.1` in your Compose
 `.env`. To pin the tested multi-platform image by digest, use
-`FILEBROWSER_IMAGE=ghcr.io/anigx/filebrowser@sha256:e76218723a00df4a5d7b8d9bdbfa250f1cb1f986422a0321abece1da6986997c`.
+`FILEBROWSER_IMAGE=ghcr.io/anigx/filebrowser@sha256:428f240073e5723566dc2ebc0df60bfb8d5a4c4d8c8a49fcade6461dd760a90d`.
 The registry selects Linux AMD64 or ARM64. See the
-[build and smoke tests](https://github.com/Anigx/filebrowser/actions/runs/45908717069).
+[build and smoke tests](https://github.com/Anigx/filebrowser/actions/runs/45926464770).
 Back up existing deployment data before upgrading, and follow the same runtime
 and HTTPS requirements below.
 
