@@ -197,7 +197,7 @@ func getAuthentication(flags *pflag.FlagSet, defaults ...interface{}) (settings.
 	return method, auther, nil
 }
 
-func printSettings(ser *settings.Server, set *settings.Settings, auther auth.Auther) error {
+func printSettings(ser *settings.Server, set *settings.Settings, _ auth.Auther) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
 	fmt.Fprintf(w, "Sign up:\t%t\n", set.Signup)
@@ -263,14 +263,7 @@ func printSettings(ser *settings.Server, set *settings.Settings, auther auth.Aut
 	fmt.Fprintf(w, "\t\tShare:\t%t\n", set.Defaults.Perm.Share)
 	fmt.Fprintf(w, "\t\tDownload:\t%t\n", set.Defaults.Perm.Download)
 
-	w.Flush()
-
-	b, err := json.MarshalIndent(auther, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Printf("\nAuther configuration (raw):\n\n%s\n\n", string(b))
-	return nil
+	return w.Flush()
 }
 
 func getSettings(flags *pflag.FlagSet, set *settings.Settings, ser *settings.Server, auther auth.Auther, all bool) (auth.Auther, error) {

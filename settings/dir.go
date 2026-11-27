@@ -3,13 +3,11 @@ package settings
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/spf13/afero"
 
 	"github.com/filebrowser/filebrowser/v2/users"
 )
@@ -26,7 +24,6 @@ func (s *Settings) MakeUserDir(username, userScope, serverRoot string) (string, 
 	if userScope == "" && s.CreateUserDir {
 		username = cleanUsername(username)
 		if username == "" || username == "-" || username == "." {
-			log.Printf("create user: invalid user for home dir creation: [%s]", username)
 			return "", errors.New("invalid user for home dir creation")
 		}
 		userScope = path.Join(s.UserHomeBasePath, username)
@@ -34,8 +31,22 @@ func (s *Settings) MakeUserDir(username, userScope, serverRoot string) (string, 
 
 	userScope = path.Join("/", userScope)
 
-	fs := afero.NewBasePathFs(afero.NewOsFs(), serverRoot)
-	if err := fs.MkdirAll(userScope, os.ModePerm); err != nil {
+	if serverRoot == "" {
+		serverRoot = "."
+	}
+	root, err := os.OpenRoot(serverRoot)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	name, err := filepath.Localize(strings.TrimPrefix(userScope, "/"))
+	if userScope == "/" {
+		name, err = ".", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := root.MkdirAll(name, os.ModePerm); err != nil {
 		return "", fmt.Errorf("failed to create user home dir: [%s]: %w", userScope, err)
 	}
 	return userScope, nil

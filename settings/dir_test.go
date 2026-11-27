@@ -1,10 +1,29 @@
 package settings
 
 import (
+	"bytes"
+	"log"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/filebrowser/filebrowser/v2/users"
 )
+
+func TestMakeUserDirDoesNotLogRejectedIdentity(t *testing.T) {
+	var output bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(original)
+
+	s := &Settings{CreateUserDir: true}
+	if _, err := s.MakeUserDir("-", "", t.TempDir()); err == nil {
+		t.Fatal("invalid identity accepted")
+	}
+	if output.Len() != 0 {
+		t.Fatal("invalid identity should not be logged by directory provisioning")
+	}
+}
 
 // A user provisioned with CreateUserDir must receive a per-user home directory
 // derived from its username, not the default scope which normalizes to the
@@ -13,7 +32,8 @@ func TestCreateUserHomeDerivesPerUserScope(t *testing.T) {
 	s := &Settings{CreateUserDir: true, UserHomeBasePath: "/users"}
 
 	user := &users.User{Username: "alice", Scope: "."}
-	derived, err := s.CreateUserHome(user, t.TempDir(), false)
+	root := t.TempDir()
+	derived, err := s.CreateUserHome(user, root, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -22,6 +42,10 @@ func TestCreateUserHomeDerivesPerUserScope(t *testing.T) {
 	}
 	if user.Scope != "/users/alice" {
 		t.Errorf("expected derived scope /users/alice, got %q", user.Scope)
+	}
+	info, err := os.Stat(filepath.Join(root, "users", "alice"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("home was not created beneath the configured root: %v", err)
 	}
 }
 

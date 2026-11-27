@@ -30,19 +30,11 @@ func NewCommand(s *settings.Settings, target []string) (*exec.Cmd, context.Cance
 		return nil, nil, err
 	}
 
-	command := target
-	if sandbox.Enabled {
-		command = append(append([]string{}, sandbox.Command...), target...)
-	}
-
-	var ctx context.Context
-	var cancel context.CancelFunc
-	if sandbox.Enabled {
-		ctx, cancel = context.WithTimeout(context.Background(), sandbox.TimeoutDuration())
-	} else {
-		ctx, cancel = context.WithCancel(context.Background())
-	}
-	return exec.CommandContext(ctx, command[0], command[1:]...), cancel, nil
+	// The request contributes only arguments after the configured delimiter;
+	// the executable is always the validated, administrator-configured launcher.
+	args := append(append([]string(nil), sandbox.Command[1:]...), target...)
+	ctx, cancel := context.WithTimeout(context.Background(), sandbox.TimeoutDuration())
+	return exec.CommandContext(ctx, sandbox.Command[0], args...), cancel, nil
 }
 
 // LimitOutput caps output only when the sandbox is enabled. It is deliberately

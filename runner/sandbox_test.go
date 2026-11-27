@@ -26,10 +26,11 @@ func TestNewCommandSandboxFailsClosedWithoutLauncher(t *testing.T) {
 }
 
 func TestNewCommandSandboxWrapsTargetWithoutRawFallback(t *testing.T) {
+	launcher := filepath.Join(t.TempDir(), "launcher")
 	s := &settings.Settings{
 		ExecutionSandbox: settings.ExecutionSandbox{
 			Enabled: true,
-			Command: []string{"/sandbox/launcher", "--policy", "/etc/filebrowser/policy", "--"},
+			Command: []string{launcher, "--policy", "/etc/filebrowser/policy", "--"},
 		},
 	}
 
@@ -39,10 +40,10 @@ func TestNewCommandSandboxWrapsTargetWithoutRawFallback(t *testing.T) {
 	}
 	defer cancel()
 
-	if got, want := cmd.Path, "/sandbox/launcher"; got != want {
+	if got, want := cmd.Path, launcher; got != want {
 		t.Fatalf("command path = %q, want sandbox launcher %q", got, want)
 	}
-	if got, want := strings.Join(cmd.Args, "\x00"), "/sandbox/launcher\x00--policy\x00/etc/filebrowser/policy\x00--\x00/bin/echo\x00hello"; got != want {
+	if got, want := strings.Join(cmd.Args, "\x00"), launcher+"\x00--policy\x00/etc/filebrowser/policy\x00--\x00/bin/echo\x00hello"; got != want {
 		t.Fatalf("sandbox args = %q, want %q", got, want)
 	}
 }
