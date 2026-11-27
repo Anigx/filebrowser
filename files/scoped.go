@@ -17,7 +17,9 @@ import (
 // confinement — and adds a per-operation scope check on every call that would
 // dereference a symlink at the OS layer (open, stat, lstat, chmod, …).
 type ScopedFs struct {
-	base *afero.BasePathFs
+	base     *afero.BasePathFs
+	parent   *ScopedFs
+	subscope string
 }
 
 var (
@@ -31,10 +33,12 @@ var (
 const maxSymlinkHops = 255
 
 func NewScopedFs(source afero.Fs, path string) *ScopedFs {
+	var parent *ScopedFs
 	if s, ok := source.(*ScopedFs); ok {
+		parent = s
 		source = s.base
 	}
-	return &ScopedFs{base: afero.NewBasePathFs(source, path).(*afero.BasePathFs)}
+	return &ScopedFs{base: afero.NewBasePathFs(source, path).(*afero.BasePathFs), parent: parent, subscope: path}
 }
 
 // NewFs builds a user filesystem rooted at path. When followExternal is true it
@@ -67,7 +71,11 @@ func (s *ScopedFs) BasePathFs() *afero.BasePathFs { return s.base }
 // the underlying BasePathFs. This is needed by callers that need the actual
 // filesystem path (e.g. disk.UsageWithContext).
 func (s *ScopedFs) RealPath(name string) (string, error) {
-	return s.base.RealPath(name)
+	local, err := cleanScopedName(name)
+	if err != nil {
+		return "", err
+	}
+	return afero.FullBaseFsPath(s.base, local), nil
 }
 
 // guard returns an error if name's on-disk target resolves outside the scope.
@@ -94,7 +102,7 @@ func (s *ScopedFs) guard(name string) error {
 // there, so a write cannot dereference the link to create a file outside the
 // scope.
 func (s *ScopedFs) within(p string) (bool, error) {
-	root, err := filepath.EvalSymlinks(afero.FullBaseFsPath(s.base, "/"))
+	root, err := filepath.EvalSymlinks(afero.FullBaseFsPath(s.base, "."))
 	if err != nil {
 		return false, err
 	}
@@ -157,97 +165,75 @@ func (s *ScopedFs) within(p string) (bool, error) {
 }
 
 func (s *ScopedFs) Create(name string) (afero.File, error) {
-	if err := s.guard(name); err != nil {
-		return nil, err
-	}
-	return s.base.Create(name)
+	return s.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o666)
 }
 
 func (s *ScopedFs) Mkdir(name string, perm os.FileMode) error {
-	if err := s.guard(name); err != nil {
-		return err
-	}
-	return s.base.Mkdir(name, perm)
+	return s.mutate(name, false, func(root *os.Root, name string) error { return root.Mkdir(name, perm.Perm()) })
 }
 
 func (s *ScopedFs) MkdirAll(path string, perm os.FileMode) error {
-	if err := s.guard(path); err != nil {
-		return err
-	}
-	return s.base.MkdirAll(path, perm)
+	return s.mutate(path, true, func(root *os.Root, name string) error { return root.MkdirAll(name, perm.Perm()) })
 }
 
 func (s *ScopedFs) Open(name string) (afero.File, error) {
-	if err := s.guard(name); err != nil {
-		return nil, err
-	}
-	return s.base.Open(name)
+	return s.OpenFile(name, os.O_RDONLY, 0)
 }
 
 func (s *ScopedFs) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
-	if err := s.guard(name); err != nil {
+	f, err := boundOperation(s, name, true, func(root *os.Root, name string) (*os.File, error) {
+		return root.OpenFile(name, flag, perm.Perm())
+	})
+	if err != nil {
 		return nil, err
 	}
-	return s.base.OpenFile(name, flag, perm)
+	return f, nil
 }
 
 func (s *ScopedFs) Remove(name string) error {
-	if err := s.guard(name); err != nil {
-		return err
-	}
-	return s.base.Remove(name)
+	return s.mutate(name, false, (*os.Root).Remove)
 }
 
 func (s *ScopedFs) RemoveAll(path string) error {
-	if err := s.guard(path); err != nil {
-		return err
-	}
-	return s.base.RemoveAll(path)
+	return s.mutate(path, false, (*os.Root).RemoveAll)
 }
 
 func (s *ScopedFs) Rename(oldname, newname string) error {
-	if err := s.guard(oldname); err != nil {
-		return err
-	}
-	if err := s.guard(newname); err != nil {
-		return err
-	}
-	return s.base.Rename(oldname, newname)
+	return s.mutate(".", false, func(root *os.Root, entry string) error {
+		if entry != "." {
+			return os.ErrPermission
+		}
+		oldname, err := s.boundName(oldname, false)
+		if err != nil {
+			return err
+		}
+		newname, err := s.boundName(newname, false)
+		if err != nil {
+			return err
+		}
+		return root.Rename(oldname, newname)
+	})
 }
 
 func (s *ScopedFs) Stat(name string) (os.FileInfo, error) {
-	if err := s.guard(name); err != nil {
-		return nil, err
-	}
-	return s.base.Stat(name)
+	return boundOperation(s, name, true, (*os.Root).Stat)
 }
 
 func (s *ScopedFs) Name() string { return "ScopedFs" }
 
 func (s *ScopedFs) Chmod(name string, mode os.FileMode) error {
-	if err := s.guard(name); err != nil {
-		return err
-	}
-	return s.base.Chmod(name, mode)
+	return s.mutate(name, true, func(root *os.Root, name string) error { return root.Chmod(name, mode) })
 }
 
 func (s *ScopedFs) Chown(name string, uid, gid int) error {
-	if err := s.guard(name); err != nil {
-		return err
-	}
-	return s.base.Chown(name, uid, gid)
+	return s.mutate(name, true, func(root *os.Root, name string) error { return root.Chown(name, uid, gid) })
 }
 
 func (s *ScopedFs) Chtimes(name string, atime, mtime time.Time) error {
-	if err := s.guard(name); err != nil {
-		return err
-	}
-	return s.base.Chtimes(name, atime, mtime)
+	return s.mutate(name, true, func(root *os.Root, name string) error { return root.Chtimes(name, atime, mtime) })
 }
 
 func (s *ScopedFs) LstatIfPossible(name string) (os.FileInfo, bool, error) {
-	if err := s.guard(name); err != nil {
-		return nil, false, err
-	}
-	return s.base.LstatIfPossible(name)
+	info, err := boundOperation(s, name, false, (*os.Root).Lstat)
+	return info, true, err
 }

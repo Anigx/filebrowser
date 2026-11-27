@@ -163,27 +163,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.26'
-      - uses: pnpm/action-setup@v6
-        with:
-          package_json_file: "frontend/package.json"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24.x"
-          cache: "pnpm"
-          cache-dependency-path: "frontend/pnpm-lock.yaml"
-      - name: Install Task
-        uses: go-task/setup-task@v2
-      - run: task build:frontend
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
-        with:
-          version: v2.20.3
-          args: release --clean
+          persist-credentials: false
+      - name: Create release record for the Docker package
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$(sh docker/package-release.sh validate-tag "$RELEASE_TAG")
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --notes "Container package: \`ghcr.io/anigx/filebrowser:$version\`. Published separately after both platform images pass package acceptance."
 
 
 

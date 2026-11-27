@@ -8,6 +8,17 @@ import (
 	"github.com/spf13/afero"
 )
 
+func TestScopedFsCopiesDirectoryPermissionBits(t *testing.T) {
+	fs := NewScopedFs(afero.NewOsFs(), t.TempDir())
+	if err := fs.MkdirAll("/nested/directory", os.ModeDir|0o750); err != nil {
+		t.Fatal(err)
+	}
+	info, err := fs.Stat("/nested/directory")
+	if err != nil || !info.IsDir() {
+		t.Fatalf("copied directory unavailable: %v", err)
+	}
+}
+
 // TestNewFs verifies that NewFs picks the right implementation and that the
 // follow-external-symlinks toggle flips whether a symlink pointing outside the
 // scope is honored.

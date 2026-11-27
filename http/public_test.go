@@ -127,7 +127,7 @@ func TestPublicShareHandlerAuthentication(t *testing.T) {
 
 				storage.Users = &customFSUser{
 					Store: storage.Users,
-					fs:    &afero.MemMapFs{},
+					fs:    files.NewScopedFs(afero.NewOsFs(), t.TempDir()),
 				}
 
 				recorder := httptest.NewRecorder()

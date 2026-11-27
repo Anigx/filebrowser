@@ -41,9 +41,10 @@ func TestScopedFs(t *testing.T) {
 		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		fs := NewScopedFs(afero.NewOsFs(), "/")
+		volume := filepath.VolumeName(f)
+		fs := NewScopedFs(afero.NewOsFs(), volume+string(filepath.Separator))
 
-		if _, err := fs.Stat(f); err != nil {
+		if _, err := fs.Stat(f[len(volume):]); err != nil {
 			t.Fatalf("expected a path under root scope to be accessible, got %v", err)
 		}
 	})

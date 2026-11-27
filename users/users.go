@@ -95,9 +95,12 @@ func (u *User) Clean(baseScope string, followExternalSymlinks bool, fields ...st
 	}
 
 	if u.Fs == nil {
-		scope := u.Scope
-		scope = filepath.Join(baseScope, filepath.Join("/", scope))
-		u.Fs = files.NewFs(afero.NewOsFs(), scope, followExternalSymlinks)
+		scope := filepath.Join("/", u.Scope)
+		if followExternalSymlinks {
+			u.Fs = files.NewFs(afero.NewOsFs(), filepath.Join(baseScope, scope), true)
+		} else {
+			u.Fs = files.NewScopedFs(files.NewScopedFs(afero.NewOsFs(), baseScope), scope)
+		}
 	}
 
 	return nil

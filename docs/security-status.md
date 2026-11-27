@@ -88,5 +88,6 @@ instance. Do not treat a green unit suite as a production deployment approval.
 
 The fork's tag workflow requires frontend and Go checks, virtual FIDO2 browser
 acceptance, and a disposable Compose/restore run for the same commit. It
-records the tested image ID in the CI summary and publishes binary archives
-and SHA-256 checksums only to `Anigx/filebrowser`.
+records the tested image ID in the CI summary and creates the GitHub release
+record. The Docker package workflow separately verifies tag acceptance and
+publishes the tested Linux images to `ghcr.io/anigx/filebrowser`.
