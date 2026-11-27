@@ -39,8 +39,8 @@ func TestPrintSettingsDoesNotExposeAuthenticatorSecret(t *testing.T) {
 }
 
 func TestParseUsernameOrIDUsesNativeUintRange(t *testing.T) {
-	max := strconv.FormatUint(uint64(^uint(0)), 10)
-	if username, id := parseUsernameOrID(max); username != "" || id != ^uint(0) {
+	maxID := strconv.FormatUint(uint64(^uint(0)), 10)
+	if username, id := parseUsernameOrID(maxID); username != "" || id != ^uint(0) {
 		t.Fatalf("maximum native ID parsed as (%q, %d)", username, id)
 	}
 	outOfRange := "18446744073709551616"
