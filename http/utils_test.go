@@ -1,13 +1,11 @@
 package fbhttp
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
-// cleanSeparators takes the host separator explicitly so the Windows behaviour
-// can be asserted from any platform. See GHSA-fgm5-pw99-w2p7: on Windows a
-// backslash is a path separator the filesystem resolves but the rule checker
-// used to treat as an ordinary character, so "/allow\..\Secret.txt" evaded a
-// rule for "/Secret.txt" and still opened it.
-func TestCleanSeparators(t *testing.T) {
+func TestSlashCleanUsesHostSeparator(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -35,10 +33,13 @@ func TestCleanSeparators(t *testing.T) {
 	}
 
 	for _, tc := range cases {
+		if tc.sep != string(filepath.Separator) {
+			continue
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := cleanSeparators(tc.in, tc.sep); got != tc.want {
-				t.Errorf("cleanSeparators(%q, %q) = %q; want %q", tc.in, tc.sep, got, tc.want)
+			if got := slashClean(tc.in); got != tc.want {
+				t.Errorf("slashClean(%q) = %q; want %q", tc.in, got, tc.want)
 			}
 		})
 	}

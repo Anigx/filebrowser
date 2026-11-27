@@ -56,7 +56,7 @@ func openRegularFile(file *files.FileInfo) (afero.File, error) {
 var resourceGetHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
-		Path:       r.URL.Path,
+		Path:       slashClean(r.URL.Path),
 		Modify:     d.user.Perm.Modify,
 		Expand:     true,
 		ReadHeader: d.server.TypeDetectionByHeader,
@@ -127,7 +127,7 @@ func withUploadCacheLease(cache UploadCache, next handleFunc) handleFunc {
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		return withUploadLease(r.Context(), cache, func() (int, error) {
 			var realPath string
-			if file, err := files.NewFileInfo(&files.FileOptions{Fs: d.user.Fs, Path: r.URL.Path, Modify: d.user.Perm.Modify, Expand: false, ReadHeader: false, Checker: d}); err == nil {
+			if file, err := files.NewFileInfo(&files.FileOptions{Fs: d.user.Fs, Path: slashClean(r.URL.Path), Modify: d.user.Perm.Modify, Expand: false, ReadHeader: false, Checker: d}); err == nil {
 				realPath = file.RealPath()
 			}
 			status, err := next(w, r, d)
@@ -151,7 +151,7 @@ func resourceDeleteHandler(fileCache FileCache, uploadCaches ...UploadCache) han
 
 		file, err := files.NewFileInfo(&files.FileOptions{
 			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
+			Path:       slashClean(r.URL.Path),
 			Modify:     d.user.Perm.Modify,
 			Expand:     false,
 			ReadHeader: d.server.TypeDetectionByHeader,
@@ -172,7 +172,7 @@ func resourceDeleteHandler(fileCache FileCache, uploadCaches ...UploadCache) han
 		}
 
 		err = d.RunHook(func() error {
-			return d.user.Fs.RemoveAll(r.URL.Path)
+			return d.user.Fs.RemoveAll(slashClean(r.URL.Path))
 		}, "delete", r.URL.Path, "", d.user)
 
 		if err != nil {
@@ -203,14 +203,14 @@ func resourcePostHandler(fileCache FileCache, uploadCaches ...UploadCache) handl
 		// Directories creation on POST.
 		if strings.HasSuffix(r.URL.Path, "/") {
 			err := d.RunHook(func() error {
-				return d.user.Fs.MkdirAll(r.URL.Path, d.settings.DirMode)
+				return d.user.Fs.MkdirAll(slashClean(r.URL.Path), d.settings.DirMode)
 			}, "upload", r.URL.Path, "", d.user)
 			return errToStatus(err), err
 		}
 
 		file, err := files.NewFileInfo(&files.FileOptions{
 			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
+			Path:       slashClean(r.URL.Path),
 			Modify:     d.user.Perm.Modify,
 			Expand:     false,
 			ReadHeader: d.server.TypeDetectionByHeader,
@@ -240,7 +240,7 @@ func resourcePostHandler(fileCache FileCache, uploadCaches ...UploadCache) handl
 		}
 
 		err = d.RunHook(func() error {
-			info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode)
+			info, writeErr := writeFile(d.user.Fs, slashClean(r.URL.Path), r.Body, d.settings.FileMode, d.settings.DirMode)
 			if writeErr != nil {
 				return writeErr
 			}
@@ -254,7 +254,7 @@ func resourcePostHandler(fileCache FileCache, uploadCaches ...UploadCache) handl
 			// A failed new-file upload may leave a partial file behind. Do not
 			// recursively remove a request path: it may be an existing directory
 			// or have been replaced concurrently.
-			_ = d.user.Fs.Remove(r.URL.Path)
+			_ = d.user.Fs.Remove(slashClean(r.URL.Path))
 		}
 
 		return errToStatus(err), err
@@ -271,7 +271,7 @@ var resourcePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 		return http.StatusMethodNotAllowed, nil
 	}
 
-	exists, err := afero.Exists(d.user.Fs, r.URL.Path)
+	exists, err := afero.Exists(d.user.Fs, slashClean(r.URL.Path))
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
@@ -280,7 +280,7 @@ var resourcePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 	}
 
 	err = d.RunHook(func() error {
-		info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode)
+		info, writeErr := writeFile(d.user.Fs, slashClean(r.URL.Path), r.Body, d.settings.FileMode, d.settings.DirMode)
 		if writeErr != nil {
 			return writeErr
 		}
@@ -519,7 +519,7 @@ type RecursiveEntry struct {
 // under the requested path, walking the tree recursively on the server side
 // so the client only needs a single HTTP call.
 var resourceGetRecursiveHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
-	rootPath := r.URL.Path
+	rootPath := slashClean(r.URL.Path)
 	if rootPath == "" {
 		rootPath = "/"
 	}
@@ -593,7 +593,7 @@ type DiskUsageResponse struct {
 var diskUsage = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
-		Path:       r.URL.Path,
+		Path:       slashClean(r.URL.Path),
 		Modify:     d.user.Perm.Modify,
 		Expand:     false,
 		ReadHeader: false,

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	gopath "path"
 	"path/filepath"
 	"strings"
 
@@ -26,7 +25,10 @@ import (
 // file a path names, and is a no-op on POSIX, where "\" is a legal character in
 // a filename and must stay one.
 func slashClean(name string) string {
-	return cleanSeparators(name, string(filepath.Separator))
+	// Strip leading separators before prepending one, so the result
+	// cannot be interpreted as a Windows UNC path.
+	name = strings.TrimLeft(filepath.ToSlash(name), "/")
+	return filepath.ToSlash(filepath.Clean("/" + name))
 }
 
 // canonicalizeRequestPath rewrites the request path to its canonical virtual
@@ -42,18 +44,6 @@ func canonicalizeRequestPath(r *http.Request) {
 		p += "/"
 	}
 	r.URL.Path = p
-}
-
-// cleanSeparators is slashClean with the host separator passed in explicitly,
-// so the Windows behaviour can be exercised on any platform.
-func cleanSeparators(name, sep string) string {
-	if sep != "/" {
-		name = strings.ReplaceAll(name, sep, "/")
-	}
-	if name == "" || name[0] != '/' {
-		name = "/" + name
-	}
-	return gopath.Clean(name)
 }
 
 func renderJSON(w http.ResponseWriter, _ *http.Request, data interface{}) (int, error) {

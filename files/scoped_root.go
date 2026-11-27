@@ -66,43 +66,26 @@ func (s *ScopedFs) boundName(name string, followFinal bool) (string, error) {
 
 // openBoundary opens the actual root used by all OS operations. Nested shares
 // open their root through the parent's handle, never through an unchecked
-// process-wide path. A share of a single regular file is represented by one
-// fixed entry in the opened directory.
-func (s *ScopedFs) openBoundary() (*os.Root, string, error) {
+// process-wide path. A scope always names a directory.
+func (s *ScopedFs) openBoundary() (*os.Root, error) {
 	if s.parent == nil {
-		root, err := os.OpenRoot(afero.FullBaseFsPath(s.base, "."))
-		return root, ".", err
+		return os.OpenRoot(afero.FullBaseFsPath(s.base, "."))
 	}
-	parent, entry, err := s.parent.openBoundary()
+	parent, err := s.parent.openBoundary()
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer parent.Close()
-	if entry != "." {
-		return nil, "", os.ErrPermission
-	}
 	name, err := s.parent.boundName(s.subscope, true)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	info, err := parent.Stat(name)
-	if err != nil {
-		return nil, "", err
-	}
-	if info.IsDir() {
-		root, err := parent.OpenRoot(name)
-		return root, ".", err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, "", os.ErrPermission
-	}
-	root, err := parent.OpenRoot(filepath.Dir(name))
-	return root, filepath.Base(name), err
+	return parent.OpenRoot(name)
 }
 
 func boundOperation[T any](s *ScopedFs, name string, followFinal bool, op func(*os.Root, string) (T, error)) (T, error) {
 	var zero T
-	root, entry, err := s.openBoundary()
+	root, err := s.openBoundary()
 	if err != nil {
 		return zero, err
 	}
@@ -110,12 +93,6 @@ func boundOperation[T any](s *ScopedFs, name string, followFinal bool, op func(*
 	name, err = s.boundName(name, followFinal)
 	if err != nil {
 		return zero, err
-	}
-	if entry != "." {
-		if name != "." {
-			return zero, os.ErrPermission
-		}
-		name = entry
 	}
 	return op(root, name)
 }

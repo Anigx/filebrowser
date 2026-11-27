@@ -199,10 +199,7 @@ func (s *ScopedFs) RemoveAll(path string) error {
 }
 
 func (s *ScopedFs) Rename(oldname, newname string) error {
-	return s.mutate(".", false, func(root *os.Root, entry string) error {
-		if entry != "." {
-			return os.ErrPermission
-		}
+	return s.mutate(".", false, func(root *os.Root, _ string) error {
 		oldname, err := s.boundName(oldname, false)
 		if err != nil {
 			return err

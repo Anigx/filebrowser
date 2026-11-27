@@ -21,7 +21,6 @@ var withHashFile = func(fn handleFunc) handleFunc {
 		if err != nil {
 			return errToStatus(err), err
 		}
-
 		status, err := authenticateShareRequest(r, link)
 		if status != 0 || err != nil {
 			return status, err
@@ -52,19 +51,19 @@ var withHashFile = func(fn handleFunc) handleFunc {
 			return errToStatus(err), err
 		}
 
+		// A single-file share already names exactly one object in the owner's
+		// scoped filesystem. Keep its original rule path without rebasing.
+		if !file.IsDir {
+			d.raw = file
+			return fn(w, r, d)
+		}
+
 		// share base path. Canonicalized because it roots both the rebased
 		// filesystem and checkerPrefix below, and a stored path that is not
 		// "/"-separated would make the two disagree on Windows.
 		basePath := slashClean(link.Path)
 
-		// file relative path
-		filePath := ""
-
-		if file.IsDir {
-			filePath = ifPath
-		}
-
-		// set fs root to the shared file/folder. Unless external symlinks are
+		// set fs root to the shared folder. Unless external symlinks are
 		// explicitly allowed, this is a ScopedFs (not a bare BasePathFs) so the
 		// share is also symlink-confined: a link inside the shared subtree that
 		// points elsewhere in the owner's scope — outside the share — must not be
@@ -78,7 +77,7 @@ var withHashFile = func(fn handleFunc) handleFunc {
 
 		file, err = files.NewFileInfo(&files.FileOptions{
 			Fs:      d.user.Fs,
-			Path:    filePath,
+			Path:    ifPath,
 			Modify:  d.user.Perm.Modify,
 			Expand:  true,
 			Checker: d,

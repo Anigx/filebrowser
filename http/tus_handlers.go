@@ -77,7 +77,7 @@ func tusPostUpload(w http.ResponseWriter, r *http.Request, d *data, cache Upload
 
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
-		Path:       r.URL.Path,
+		Path:       slashClean(r.URL.Path),
 		Modify:     d.user.Perm.Modify,
 		Expand:     false,
 		ReadHeader: d.server.TypeDetectionByHeader,
@@ -85,7 +85,7 @@ func tusPostUpload(w http.ResponseWriter, r *http.Request, d *data, cache Upload
 	})
 	switch {
 	case errors.Is(err, afero.ErrFileNotFound):
-		dirPath := filepath.Dir(r.URL.Path)
+		dirPath := filepath.Dir(slashClean(r.URL.Path))
 		if _, statErr := d.user.Fs.Stat(dirPath); os.IsNotExist(statErr) {
 			if mkdirErr := d.user.Fs.MkdirAll(dirPath, d.settings.DirMode); mkdirErr != nil {
 				return http.StatusInternalServerError, err
@@ -116,7 +116,7 @@ func tusPostUpload(w http.ResponseWriter, r *http.Request, d *data, cache Upload
 		fileFlags |= os.O_TRUNC
 	}
 
-	openFile, err := d.user.Fs.OpenFile(r.URL.Path, fileFlags, d.settings.FileMode)
+	openFile, err := d.user.Fs.OpenFile(slashClean(r.URL.Path), fileFlags, d.settings.FileMode)
 	if err != nil {
 		return errToStatus(err), err
 	}
@@ -124,7 +124,7 @@ func tusPostUpload(w http.ResponseWriter, r *http.Request, d *data, cache Upload
 
 	file, err = files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
-		Path:       r.URL.Path,
+		Path:       slashClean(r.URL.Path),
 		Modify:     d.user.Perm.Modify,
 		Expand:     false,
 		ReadHeader: false,
@@ -143,7 +143,7 @@ func tusPostUpload(w http.ResponseWriter, r *http.Request, d *data, cache Upload
 	// Enables the user to utilize the PATCH endpoint for uploading file data.
 	// The removal callback deletes an abandoned upload through the user's
 	// scoped filesystem, so eviction cannot follow a symlink out of scope.
-	uploadPath := r.URL.Path
+	uploadPath := slashClean(r.URL.Path)
 	objectID, err := uploadObjectID(file)
 	if err != nil {
 		return http.StatusConflict, err
@@ -170,7 +170,7 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 
 		file, err := files.NewFileInfo(&files.FileOptions{
 			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
+			Path:       slashClean(r.URL.Path),
 			Modify:     d.user.Perm.Modify,
 			Expand:     false,
 			ReadHeader: d.server.TypeDetectionByHeader,
@@ -230,7 +230,7 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
-		Path:       r.URL.Path,
+		Path:       slashClean(r.URL.Path),
 		Modify:     d.user.Perm.Modify,
 		Expand:     false,
 		ReadHeader: d.server.TypeDetectionByHeader,
@@ -274,7 +274,7 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 		)
 	}
 
-	openFile, err := d.user.Fs.OpenFile(r.URL.Path, os.O_WRONLY|os.O_APPEND, d.settings.FileMode)
+	openFile, err := d.user.Fs.OpenFile(slashClean(r.URL.Path), os.O_WRONLY|os.O_APPEND, d.settings.FileMode)
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err)
 	}
@@ -344,7 +344,7 @@ func tusDeleteUpload(r *http.Request, d *data, cache UploadCache) (int, error) {
 
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
-		Path:       r.URL.Path,
+		Path:       slashClean(r.URL.Path),
 		Modify:     d.user.Perm.Modify,
 		Expand:     false,
 		ReadHeader: d.server.TypeDetectionByHeader,
@@ -368,7 +368,7 @@ func tusDeleteUpload(r *http.Request, d *data, cache UploadCache) (int, error) {
 		return http.StatusNotFound, nil
 	}
 
-	err = d.user.Fs.RemoveAll(r.URL.Path)
+	err = d.user.Fs.RemoveAll(slashClean(r.URL.Path))
 	if err != nil {
 		return errToStatus(err), err
 	}

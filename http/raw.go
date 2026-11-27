@@ -81,7 +81,7 @@ var rawHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) 
 
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
-		Path:       r.URL.Path,
+		Path:       slashClean(r.URL.Path),
 		Modify:     d.user.Perm.Modify,
 		Expand:     false,
 		ReadHeader: d.server.TypeDetectionByHeader,
