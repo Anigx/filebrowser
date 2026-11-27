@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"net"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -87,6 +89,88 @@ func TestStartupWebAuthnEnvironment(t *testing.T) {
 	require.Equal(t, "https://FILES.example:443", v.GetString("webauthn.origin"))
 }
 
+func TestStartupWebAuthnPrecedence(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "settings.json")
+	require.NoError(t, os.WriteFile(configPath, []byte(`{"webauthn":{"origin":"https://config.example"}}`), 0600))
+	makeCommand := func() *cobra.Command {
+		t.Helper()
+		cmd := &cobra.Command{}
+		cmd.Flags().String("config", configPath, "")
+		cmd.Flags().String("webauthn.origin", "", "")
+		return cmd
+	}
+	t.Setenv("FB_WEBAUTHN_ORIGIN", "")
+	v, err := initViper(makeCommand())
+	require.NoError(t, err)
+	require.NoError(t, validateStartupWebAuthn(v, false))
+	require.Empty(t, v.GetString("webauthn.origin"))
+
+	t.Setenv("FB_WEBAUTHN_ORIGIN", "https://env.example")
+	cmd := makeCommand()
+	v, err = initViper(cmd)
+	require.NoError(t, err)
+	require.Equal(t, "https://env.example", v.GetString("webauthn.origin"))
+	require.NoError(t, cmd.Flags().Set("webauthn.origin", "https://flag.example"))
+	v, err = initViper(cmd)
+	require.NoError(t, err)
+	require.Equal(t, "https://flag.example", v.GetString("webauthn.origin"))
+
+	v = viper.New()
+	v.Set("webauthn.origin", []string{"https://invalid.example"})
+	require.ErrorContains(t, validateStartupWebAuthn(v, false), "must be a string")
+}
+
+func TestStartupWebAuthnRechecksStoreUnderLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "contended.db")
+	cmd := &cobra.Command{}
+	cmd.Flags().String("config", "", "")
+	cmd.Flags().String("database", path, "")
+	run := withViperAndStore(func(_ *cobra.Command, _ []string, _ *viper.Viper, st *store) error {
+		require.True(t, st.databaseExisted, "do not bootstrap over settings created by another start")
+		return nil
+	}, storeOptions{allowsNoDatabase: true, validateBeforeOpen: func(_ *viper.Viper, exists bool) error {
+		require.False(t, exists)
+		db, err := storm.Open(path)
+		require.NoError(t, err)
+		defer db.Close()
+		s, err := bolt.NewStorage(db)
+		require.NoError(t, err)
+		return s.Settings.Save(&settings.Settings{Key: []byte("existing"), AuthMethod: auth.MethodJSONAuth})
+	}})
+	require.NoError(t, run(cmd, nil))
+}
+
+func TestStartupWebAuthnUnchangedWhenPortIsUnavailable(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	path := filepath.Join(t.TempDir(), "existing.db")
+	db, err := storm.Open(path)
+	require.NoError(t, err)
+	s, err := bolt.NewStorage(db)
+	require.NoError(t, err)
+	require.NoError(t, s.Settings.Save(&settings.Settings{Key: []byte("test"), AuthMethod: auth.MethodJSONAuth, WebAuthnOrigin: "https://files.example"}))
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+	require.NoError(t, s.Settings.SaveServer(&settings.Server{Address: "127.0.0.1", Port: port, Root: t.TempDir()}))
+	require.NoError(t, db.Close())
+
+	t.Setenv("FB_DATABASE", path)
+	t.Setenv("FB_WEBAUTHN_ORIGIN", "https://files.example:8443")
+	cmd := &cobra.Command{}
+	cmd.Flags().AddFlagSet(rootCmd.Flags())
+	cmd.Flags().AddFlagSet(rootCmd.PersistentFlags())
+	require.ErrorContains(t, rootCmd.RunE(cmd, nil), "listen")
+	db, err = storm.Open(path)
+	require.NoError(t, err)
+	defer db.Close()
+	s, err = bolt.NewStorage(db)
+	require.NoError(t, err)
+	set, err := s.Settings.Get()
+	require.NoError(t, err)
+	require.Equal(t, "https://files.example", set.WebAuthnOrigin)
+}
+
 func TestStartupWebAuthnValidationBeforeOpen(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -132,10 +216,19 @@ func TestStartupWebAuthnPersistsAndGuardsOrigin(t *testing.T) {
 		require.Equal(t, auth.MethodJSONAuth, settings.AuthMethod)
 		require.Equal(t, []byte("test"), settings.Key)
 	}
-	require.NoError(t, applyStartupWebAuthn(st, "https://FILES.example:443"))
-	require.NoError(t, applyStartupWebAuthn(st, "https://files.example"))
-	require.NoError(t, applyStartupWebAuthn(st, ""))
-	require.Error(t, applyStartupWebAuthn(st, "http://files.example"))
+	next, err := stageStartupWebAuthn(st, "https://FILES.example:443")
+	require.NoError(t, err)
+	check("")
+	require.Equal(t, "https://files.example", next.WebAuthnOrigin)
+	require.NoError(t, st.Settings.Save(next))
+	next, err = stageStartupWebAuthn(st, "https://files.example")
+	require.NoError(t, err)
+	require.Nil(t, next)
+	next, err = stageStartupWebAuthn(st, "")
+	require.NoError(t, err)
+	require.Nil(t, next)
+	_, err = stageStartupWebAuthn(st, "http://files.example")
+	require.Error(t, err)
 	check("https://files.example")
 
 	user := &users.User{Username: "test-user", Password: "test-hash"}
@@ -146,8 +239,10 @@ func TestStartupWebAuthnPersistsAndGuardsOrigin(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	require.Error(t, applyStartupWebAuthn(st, "https://other.example"))
+	_, err = stageStartupWebAuthn(st, "https://other.example")
+	require.Error(t, err)
 	check("https://files.example")
-	require.NoError(t, applyStartupWebAuthn(st, "https://files.example:8443"))
-	check("https://files.example:8443")
+	next, err = stageStartupWebAuthn(st, "https://files.example:8443")
+	require.NoError(t, err)
+	require.Equal(t, "https://files.example:8443", next.WebAuthnOrigin)
 }

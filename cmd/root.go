@@ -164,7 +164,8 @@ user created with the credentials from options "username" and "password".`,
 				return err
 			}
 		}
-		if err := applyStartupWebAuthn(st, v.GetString("webauthn.origin")); err != nil {
+		startupSettings, err := stageStartupWebAuthn(st, v.GetString("webauthn.origin"))
+		if err != nil {
 			return err
 		}
 
@@ -217,6 +218,7 @@ user created with the credentials from options "username" and "password".`,
 			if err != nil {
 				return err
 			}
+			defer listener.Close()
 			socketPerm := v.GetUint32("socketPerm")
 			err = os.Chmod(server.Socket, os.FileMode(socketPerm))
 			if err != nil {
@@ -240,18 +242,24 @@ user created with the credentials from options "username" and "password".`,
 				return err
 			}
 		}
+		if server.Socket == "" {
+			defer listener.Close()
+		}
 
 		assetsFs, err := fs.Sub(frontend.Assets(), "dist")
 		if err != nil {
 			panic(err)
 		}
 
-		handler, err := fbhttp.NewHandler(imageService, fileCache, uploadCache, st.Storage, server, assetsFs)
+		handler, err := fbhttp.NewHandlerWithSettings(imageService, fileCache, uploadCache, st.Storage, server, assetsFs, startupSettings)
 		if err != nil {
 			return err
 		}
-
-		defer listener.Close()
+		if startupSettings != nil {
+			if err := st.Settings.Save(startupSettings); err != nil {
+				return err
+			}
+		}
 
 		log.Println("Listening on", listener.Addr().String())
 		srv := &http.Server{

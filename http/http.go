@@ -29,11 +29,28 @@ func NewHandler(
 	server *settings.Server,
 	assetsFs fs.FS,
 ) (http.Handler, error) {
+	return NewHandlerWithSettings(imgSvc, fileCache, uploadCache, store, server, assetsFs, nil)
+}
+
+// NewHandlerWithSettings builds routes for staged startup settings. The caller
+// must persist them before allowing any requests. Nil uses the stored settings.
+func NewHandlerWithSettings(
+	imgSvc ImgService,
+	fileCache FileCache,
+	uploadCache UploadCache,
+	store *storage.Storage,
+	server *settings.Server,
+	assetsFs fs.FS,
+	set *settings.Settings,
+) (http.Handler, error) {
 	var keyAuth *securityKeyAuth
 	if store.SecurityKeys != nil {
-		set, err := store.Settings.Get()
-		if err != nil {
-			return nil, err
+		if set == nil {
+			var err error
+			set, err = store.Settings.Get()
+			if err != nil {
+				return nil, err
+			}
 		}
 		if set.AuthMethod != auth.MethodJSONAuth {
 			enrolled, err := store.SecurityKeys.Any()

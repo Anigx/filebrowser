@@ -36,8 +36,9 @@ On v2.64.1 or newer, set `FB_WEBAUTHN_ORIGIN=https://files.example.com` in
 the container's environment and recreate the service. The supplied Compose
 file reads the value from `.env`. File Browser validates and saves the origin
 at startup for both new and existing databases. Without Docker, the server
-startup flag `--webauthn.origin` does the same. Unset or empty keeps the
-previously saved setting.
+startup flag `--webauthn.origin` does the same. Startup precedence is flag,
+environment, then configuration file. With no startup origin, or an explicitly
+empty environment value and no overriding flag, the saved setting is kept.
 
 For a manual database update, stop File Browser and run:
 

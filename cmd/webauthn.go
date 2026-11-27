@@ -13,36 +13,45 @@ import (
 )
 
 func validateStartupWebAuthn(v *viper.Viper, databaseExists bool) error {
-	raw := v.GetString("webauthn.origin")
+	value := v.Get("webauthn.origin")
+	if value == nil {
+		return nil
+	}
+	raw, ok := value.(string)
+	if !ok {
+		return errors.New("startup WebAuthn origin must be a string")
+	}
 	if raw == "" {
 		return nil
 	}
 	if !databaseExists && v.GetBool("noauth") {
 		return errors.New("WebAuthn requires JSON authentication; remove --noauth or FB_WEBAUTHN_ORIGIN")
 	}
-	if _, err := auth.NewWebAuthn(raw); err != nil {
+	webauthn, err := auth.NewWebAuthn(raw)
+	if err != nil {
 		return fmt.Errorf("startup WebAuthn configuration: %w", err)
 	}
+	v.Set("webauthn.origin", webauthn.Config.RPOrigins[0])
 	return nil
 }
 
-func applyStartupWebAuthn(st *store, raw string) error {
+func stageStartupWebAuthn(st *store, raw string) (*settings.Settings, error) {
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	current, err := st.Settings.Get()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	next := *current
 	next.WebAuthnOrigin = raw
 	if err := validateWebAuthnConfig(st, current, &next); err != nil {
-		return fmt.Errorf("startup WebAuthn configuration: %w", err)
+		return nil, fmt.Errorf("startup WebAuthn configuration: %w", err)
 	}
 	if current.WebAuthnOrigin == next.WebAuthnOrigin {
-		return nil
+		return nil, nil
 	}
-	return st.Settings.Save(&next)
+	return &next, nil
 }
 
 func validateWebAuthnConfig(st *store, previous, next *settings.Settings) error {

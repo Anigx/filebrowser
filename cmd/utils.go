@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/viper"
 	yaml "gopkg.in/yaml.v3"
 
+	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/storage"
 	"github.com/filebrowser/filebrowser/v2/storage/bolt"
@@ -127,6 +129,13 @@ func initViper(cmd *cobra.Command) (*viper.Viper, error) {
 	} else {
 		log.Printf("Using config file: %s", v.ConfigFileUsed())
 	}
+	// An explicitly empty startup origin keeps the stored setting and must not
+	// fall through to an origin in the config file. Leave other env vars alone.
+	if flag := cmd.Flags().Lookup("webauthn.origin"); flag != nil && !flag.Changed {
+		if value, present := os.LookupEnv("FB_WEBAUTHN_ORIGIN"); present && value == "" {
+			v.Set("webauthn.origin", "")
+		}
+	}
 
 	// Return Viper
 	return v, nil
@@ -188,6 +197,19 @@ func withViperAndStore(fn func(cmd *cobra.Command, args []string, v *viper.Viper
 		storage, err := bolt.NewStorage(db)
 		if err != nil {
 			return err
+		}
+		// Another process may have initialized this file after the initial
+		// stat. Now that we own the Bolt lock, never overwrite its settings.
+		if !exists {
+			switch _, err := storage.Settings.Get(); {
+			case err == nil:
+				exists = true
+				if options.expectsNoDatabase {
+					return fmt.Errorf("%s already exists", path)
+				}
+			case !errors.Is(err, fberrors.ErrNotExist):
+				return err
+			}
 		}
 
 		store := &store{

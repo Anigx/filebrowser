@@ -29,10 +29,10 @@
 
 **Files:** `cmd/root.go`, `cmd/utils.go`, `cmd/webauthn.go`, `cmd/webauthn_test.go`, `tests/e2e/security_key.py`.
 
-- [ ] Test `initViper` with `FB_WEBAUTHN_ORIGIN` and expect `v.GetString("webauthn.origin") == "https://FILES.example:443"`. Test `applyStartupWebAuthn(st, raw)` with an existing database: normalize that value to `https://files.example`, preserve it on empty or invalid input, and refuse another hostname once enrolled.
+- [ ] Test `initViper` with `FB_WEBAUTHN_ORIGIN` and expect `v.GetString("webauthn.origin") == "https://FILES.example:443"`. Test `stageStartupWebAuthn(st, raw)` with an existing database: normalize that value to `https://files.example`, preserve it on empty or invalid input, and refuse another hostname once enrolled.
 - [ ] Test that `validateStartupWebAuthn(v, false)` rejects non-HTTPS remote origins and quick-setup `--noauth` with an origin. Test the startup wrapper on a non-existent database path to prove a rejected input does not create it.
 - [ ] Run `go test ./cmd -run 'TestStartupWebAuthn'`; expect red before implementation.
-- [ ] Add `validateStartupWebAuthn(v *viper.Viper, databaseExists bool) error` as a `storeOptions.validateBeforeOpen` hook for the root command. Add `applyStartupWebAuthn(st *store, raw string) error` before starting the HTTP server; persist only changes accepted by `validateWebAuthnConfig`. Add the `webauthn.origin` root flag.
+- [ ] Add `validateStartupWebAuthn(v *viper.Viper, databaseExists bool) error` as a `storeOptions.validateBeforeOpen` hook for the root command and recheck initialized settings under the database lock. Add `stageStartupWebAuthn(st *store, raw string) (*settings.Settings, error)` to prepare changes accepted by `validateWebAuthnConfig`. Build the handler with staged settings and persist them only after listener and handler validation, before serving. Add the `webauthn.origin` root flag and verify flag, environment, config file, and empty-value precedence.
 - [ ] In the Chromium test, initialize an existing DB without a WebAuthn origin, start with `FB_WEBAUTHN_ORIGIN`, register keys, then restart the cold-restored database without the variable and sign in with a key. Keep all current virtual-key assertions.
 - [ ] Run Go focused tests, build/vet, and Chromium virtual-key acceptance. Document any existing local Windows-only failures separately from Linux CI.
 
