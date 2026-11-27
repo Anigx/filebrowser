@@ -295,17 +295,15 @@ var resourcePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 
 func resourcePatchHandler(fileCache FileCache) handleFunc {
 	return withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
-		src := r.URL.Path
-		dst := r.URL.Query().Get("destination")
+		src := slashClean(r.URL.Path)
+		rawDestination, err := url.QueryUnescape(r.URL.Query().Get("destination"))
+		if err != nil {
+			return http.StatusBadRequest, err
+		}
+		dst := slashClean(rawDestination)
 		action := r.URL.Query().Get("action")
-		dst, err := url.QueryUnescape(dst)
-		dst = slashClean(dst)
-		src = slashClean(src)
 		if !d.Check(src) || !d.Check(dst) {
 			return http.StatusForbidden, nil
-		}
-		if err != nil {
-			return errToStatus(err), err
 		}
 		if dst == "/" || src == "/" {
 			return http.StatusForbidden, nil
@@ -329,7 +327,7 @@ func resourcePatchHandler(fileCache FileCache) handleFunc {
 				}
 			}
 			if rename {
-				dst = addVersionSuffix(dst, d.user.Fs)
+				dst = slashClean(addVersionSuffix(dst, d.user.Fs))
 			}
 
 			if override && !d.user.Perm.Modify {
@@ -468,17 +466,14 @@ func patchAction(ctx context.Context, action, src, dst string, d *data, fileCach
 			return fberrors.ErrPermissionDenied
 		}
 
-		return fileutils.Copy(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode)
+		return fileutils.Copy(d.user.Fs, slashClean(src), slashClean(dst), d.settings.FileMode, d.settings.DirMode)
 	case "rename":
 		if !d.user.Perm.Rename {
 			return fberrors.ErrPermissionDenied
 		}
-		src = path.Clean("/" + src)
-		dst = path.Clean("/" + dst)
-
 		file, err := files.NewFileInfo(&files.FileOptions{
 			Fs:         d.user.Fs,
-			Path:       src,
+			Path:       slashClean(src),
 			Modify:     d.user.Perm.Modify,
 			Expand:     false,
 			ReadHeader: false,
@@ -494,7 +489,7 @@ func patchAction(ctx context.Context, action, src, dst string, d *data, fileCach
 			return err
 		}
 
-		if err := fileutils.MoveFile(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode); err != nil {
+		if err := fileutils.MoveFile(d.user.Fs, file.Path, slashClean(dst), d.settings.FileMode, d.settings.DirMode); err != nil {
 			return err
 		}
 		if err := d.store.Share.DeleteWithPathPrefix(src, d.user.ID); err != nil {
