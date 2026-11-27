@@ -77,8 +77,11 @@ Compose environment variables.
 
 To enable passwordless security-key sign-in, follow the
 [WebAuthn setup](authentication.md#passwordless-security-keys-webauthn).
-Use the origin seen by the browser at the HTTPS proxy, and keep the entire
-database in your backup so the registered public credentials are restored.
+On v2.64.1 or newer, add `FB_WEBAUTHN_ORIGIN=https://files.example.com` to
+`.env` when using the supplied Compose file and recreate the service. If
+you use your own Compose file, set it under the service's `environment`.
+Use the origin seen by the browser at the HTTPS proxy, and keep the
+entire database in your backup so the registered public credentials are restored.
 
 ### Custom health endpoints
 

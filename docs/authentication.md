@@ -30,16 +30,26 @@ Where `https://recaptcha.net` is any provider you want.
 
 With JSON authentication, users can replace their password with a FIDO2 key,
 such as a compatible YubiKey. Configure the public browser origin, not the
-internal proxy address or a URL containing the application base path:
+internal proxy address or a URL containing the application base path.
+
+On v2.64.1 or newer, set `FB_WEBAUTHN_ORIGIN=https://files.example.com` in
+the container's environment and recreate the service. The supplied Compose
+file reads the value from `.env`. File Browser validates and saves the origin
+at startup for both new and existing databases. Without Docker, the server
+startup flag `--webauthn.origin` does the same. Unset or empty keeps the
+previously saved setting.
+
+For a manual database update, stop File Browser and run:
 
 ```sh
 filebrowser config set --webauthn.origin=https://files.example.com
 ```
 
-Stop File Browser before changing its database configuration, then restart it
-behind the trusted HTTPS proxy. For local tests, `http://localhost:8000` is
-supported. Switch enrolled accounts back to passwords before changing the
-hostname or leaving JSON authentication.
+Restart behind the trusted HTTPS proxy. For local tests,
+`http://localhost:8000` is supported. Switch enrolled accounts back to
+passwords before changing the hostname or leaving JSON authentication. To
+turn WebAuthn off, remove the startup setting and clear the stored origin
+with `filebrowser config set --webauthn.origin=` while stopped.
 
 In **Settings → Profile → Security keys**, confirm your current password and
 register a key. The old password stops working, and existing sessions are

@@ -3,6 +3,8 @@ services:
     # Use the local develop image by default. Set FILEBROWSER_IMAGE only when
     # intentionally selecting a built or registry-hosted tag.
     image: ${FILEBROWSER_IMAGE:-anigx/filebrowser:develop-local}
+    environment:
+      FB_WEBAUTHN_ORIGIN: ${FB_WEBAUTHN_ORIGIN:-}
     ports:
       # Keep File Browser private to this host; expose it through a trusted
       # reverse proxy or tunnel rather than binding it to every interface.

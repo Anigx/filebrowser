@@ -138,8 +138,9 @@ type store struct {
 }
 
 type storeOptions struct {
-	expectsNoDatabase bool
-	allowsNoDatabase  bool
+	expectsNoDatabase  bool
+	allowsNoDatabase   bool
+	validateBeforeOpen func(v *viper.Viper, databaseExists bool) error
 }
 
 type cobraFunc func(cmd *cobra.Command, args []string) error
@@ -169,6 +170,11 @@ func withViperAndStore(fn func(cmd *cobra.Command, args []string, v *viper.Viper
 			log.Fatal(path + " does not exist. Please run 'filebrowser config init' first.")
 		case !exists && !options.expectsNoDatabase:
 			log.Println("WARNING: filebrowser.db can't be found. Initialing in " + strings.TrimSuffix(path, "filebrowser.db"))
+		}
+		if options.validateBeforeOpen != nil {
+			if err := options.validateBeforeOpen(v, exists); err != nil {
+				return err
+			}
 		}
 
 		log.Println("Using database: " + path)

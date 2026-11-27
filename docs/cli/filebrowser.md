@@ -75,6 +75,7 @@ filebrowser [flags]
       --socketPerm uint32              unix socket file permissions (default 438)
       --tokenExpirationTime string     user session timeout (default "2h")
       --username string                username for the first user when using quick setup (default "admin")
+      --webauthn.origin string         save the public HTTPS origin for WebAuthn at startup (JSON auth only)
 ```
 
 ## See Also

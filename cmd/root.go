@@ -91,6 +91,7 @@ func init() {
 	flags.Uint32("socketPerm", 0666, "unix socket file permissions")
 	flags.String("cacheDir", "", "file cache directory (disabled if empty)")
 	flags.String("redisCacheUrl", "", "redis cache URL (for multi-instance deployments), e.g. redis://user:pass@host:port")
+	flags.String("webauthn.origin", "", "save the public HTTPS origin for WebAuthn at startup (JSON auth only)")
 	flags.Int("imageProcessors", 4, "image processors count")
 	addServerFlags(flags)
 }
@@ -162,6 +163,9 @@ user created with the credentials from options "username" and "password".`,
 			if err != nil {
 				return err
 			}
+		}
+		if err := applyStartupWebAuthn(st, v.GetString("webauthn.origin")); err != nil {
+			return err
 		}
 
 		// build img service
@@ -283,7 +287,7 @@ user created with the credentials from options "username" and "password".`,
 		log.Println("Graceful shutdown complete.")
 
 		return nil
-	}, storeOptions{allowsNoDatabase: true}),
+	}, storeOptions{allowsNoDatabase: true, validateBeforeOpen: validateStartupWebAuthn}),
 }
 
 func getServerSettings(v *viper.Viper, st *storage.Storage) (*settings.Server, error) {

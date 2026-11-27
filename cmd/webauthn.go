@@ -2,12 +2,48 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
+
+	"github.com/spf13/viper"
 
 	"github.com/filebrowser/filebrowser/v2/auth"
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
+
+func validateStartupWebAuthn(v *viper.Viper, databaseExists bool) error {
+	raw := v.GetString("webauthn.origin")
+	if raw == "" {
+		return nil
+	}
+	if !databaseExists && v.GetBool("noauth") {
+		return errors.New("WebAuthn requires JSON authentication; remove --noauth or FB_WEBAUTHN_ORIGIN")
+	}
+	if _, err := auth.NewWebAuthn(raw); err != nil {
+		return fmt.Errorf("startup WebAuthn configuration: %w", err)
+	}
+	return nil
+}
+
+func applyStartupWebAuthn(st *store, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	current, err := st.Settings.Get()
+	if err != nil {
+		return err
+	}
+	next := *current
+	next.WebAuthnOrigin = raw
+	if err := validateWebAuthnConfig(st, current, &next); err != nil {
+		return fmt.Errorf("startup WebAuthn configuration: %w", err)
+	}
+	if current.WebAuthnOrigin == next.WebAuthnOrigin {
+		return nil
+	}
+	return st.Settings.Save(&next)
+}
 
 func validateWebAuthnConfig(st *store, previous, next *settings.Settings) error {
 	var rp string

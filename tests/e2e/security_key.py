@@ -50,17 +50,19 @@ def run():
             if result.returncode:
                 raise RuntimeError(f"Fixture command failed: {args[:2]}")
 
-        if not os.environ.get("QA_WEBAUTHN_BASELINE"):
-            cli("config", "init", "--webauthn.origin", origin)
-        else:
-            cli("config", "init")
+        cli("config", "init")
         cli("users", "add", "--perm.admin", "--", "fixture-admin", admin_password)
         cli("users", "add", "--", "fixture-user", user_password)
 
-        def start():
+        def start(*, configure_origin=False):
+            env = os.environ.copy()
+            if configure_origin and not env.get("QA_WEBAUTHN_BASELINE"):
+                env["FB_WEBAUTHN_ORIGIN"] = origin
+            else:
+                env.pop("FB_WEBAUTHN_ORIGIN", None)
             proc = subprocess.Popen([*opt, "--root", str(root), "--address", "127.0.0.1",
                                      "--port", str(port), "--baseURL", prefix],
-                                    cwd=tmp, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    cwd=tmp, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             wait_for_health(base + "/health", proc)
             return proc
 
@@ -68,7 +70,7 @@ def run():
             proc.terminate()
             proc.wait(timeout=10)
 
-        process = start()
+        process = start(configure_origin=True)
         try:
             with sync_playwright() as playwright:
                 browser_path = os.environ.get("QA_CHROMIUM")
