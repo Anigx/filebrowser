@@ -1,6 +1,7 @@
-> [!WARNING]
-> 
-> **File Browser is archived on 2026-09-01**. The last planned release has already shipped. There will be no further releases, bug fixes, or security fixes.   
+> [!NOTE]
+> **[Anigx](https://github.com/Anigx) continues to develop and maintain this fork of File Browser.**
+> The [original upstream project](https://github.com/filebrowser/filebrowser) was archived
+> on September 1, 2026. That archive notice applies to upstream, not to this fork.
 
 <p align="center">
   <img src="./branding/banner.png" width="550"/>
@@ -8,14 +9,13 @@
 
 File Browser provides a file managing interface within a specified directory and it can be used to upload, delete, preview and edit your files. It is a **create-your-own-cloud**-kind of software where you can just install it on your server, direct it to a path and access your files through a nice web interface.
 
-**Background:** [Goodbye File Browser, for Real This Time](https://hacdias.com/2026/07/28/filebrowser/), July 2026.
+**Upstream background:** [Goodbye File Browser, for Real This Time](https://hacdias.com/2026/07/28/filebrowser/), July 2026.
 
 ## Security
 
-Upstream File Browser is archived. This fork maintains a documented, targeted
-hardening branch; it does **not** claim to replace an actively maintained
-upstream project. The precise advisory-to-fix-to-test mapping, residual risks,
-and release gate are in [`docs/security-status.md`](docs/security-status.md).
+This fork includes targeted security hardening. It does **not** claim to fix
+every known upstream vulnerability. See [`docs/security-status.md`](docs/security-status.md)
+for the fixes, tests, remaining risks, and release requirements.
 
 Published upstream advisories remain available from
 [GitHub Security Advisories](https://github.com/filebrowser/filebrowser/security/advisories).
